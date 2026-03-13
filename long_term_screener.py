@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+import gc
 from pathlib import Path
 import time
 
@@ -22,6 +23,8 @@ MIN_REVENUE_GROWTH_PCT = 5.0
 MIN_PROFIT_MARGIN_PCT = 5.0
 MIN_ROE_PCT = 8.0
 MAX_52W_HIGH_GAP_PCT = 20.0
+MAX_CHANGE_20D_PCT = 25.0
+MAX_CHANGE_60D_PCT = 80.0
 
 
 def _ticker_path() -> Path:
@@ -41,16 +44,25 @@ def load_tickers() -> pd.DataFrame:
     return df.head(MAX_TICKERS).reset_index(drop=True)
 
 
-def fetch_price_history(ticker: str) -> pd.DataFrame | None:
+def close_ticker_session(ticker_obj) -> None:
+    if ticker_obj is None:
+        return
+    session = getattr(getattr(ticker_obj, "_data", None), "session", None)
+    close = getattr(session, "close", None)
+    if callable(close):
+        try:
+            close()
+        except Exception:
+            pass
+    gc.collect()
+
+
+def fetch_price_history(ticker_obj, ticker: str) -> pd.DataFrame | None:
     try:
-        df = yf.download(
-            ticker,
+        df = ticker_obj.history(
             period="18mo",
             interval="1d",
-            progress=False,
-            threads=False,
             auto_adjust=True,
-            group_by="column",
         )
     except Exception as exc:
         print(f"fetch_price_history error: {ticker} {exc}")
@@ -70,9 +82,9 @@ def fetch_price_history(ticker: str) -> pd.DataFrame | None:
     return df
 
 
-def fetch_fundamentals(ticker: str) -> dict | None:
+def fetch_fundamentals(ticker_obj, ticker: str) -> dict | None:
     try:
-        info = yf.Ticker(ticker).info
+        info = ticker_obj.info
     except Exception as exc:
         print(f"fetch_fundamentals error: {ticker} {exc}")
         return None
@@ -140,6 +152,12 @@ def passes_long_term_filter(latest: pd.Series, fundamentals: dict) -> bool:
     if latest["gap_to_52w_high_pct"] > MAX_52W_HIGH_GAP_PCT:
         return False
 
+    if latest["change_20d_pct"] > MAX_CHANGE_20D_PCT:
+        return False
+
+    if latest["change_60d_pct"] > MAX_CHANGE_60D_PCT:
+        return False
+
     market_cap = fundamentals.get("market_cap")
     if market_cap is None or market_cap < MIN_MARKET_CAP:
         return False
@@ -181,20 +199,30 @@ def score_row(latest: pd.Series, fundamentals: dict) -> tuple[float, float, floa
     revenue_growth = fundamentals.get("revenue_growth_pct") or 0.0
     profit_margin = fundamentals.get("profit_margin_pct") or 0.0
     roe = fundamentals.get("roe_pct") or 0.0
-    quality_score += min(revenue_growth, 30.0) * 0.12
-    quality_score += min(profit_margin, 25.0) * 0.15
-    quality_score += min(roe, 25.0) * 0.12
+    current_ratio = fundamentals.get("current_ratio") or 0.0
+    debt_to_equity = fundamentals.get("debt_to_equity")
+    quality_score += min(revenue_growth, 30.0) * 0.11
+    quality_score += min(profit_margin, 25.0) * 0.18
+    quality_score += min(roe, 25.0) * 0.16
+    if current_ratio >= 1.5:
+        quality_score += 0.8
 
     strength_score += min(max(latest["change_20d_pct"], 0.0), 30.0) * 0.08
     strength_score += min(max(latest["change_60d_pct"], 0.0), 50.0) * 0.08
-    strength_score += min(max(20.0 - latest["gap_to_52w_high_pct"], 0.0), 20.0) * 0.15
+    gap_score = min(max(16.0 - latest["gap_to_52w_high_pct"], 0.0), 16.0) * 0.12
+    if latest["gap_to_52w_high_pct"] < 2.0:
+        gap_score -= 0.8
+    strength_score += gap_score
     strength_score += min(max(latest["volume_ratio_20"], 0.0), 3.0) * 0.5
 
-    debt_to_equity = fundamentals.get("debt_to_equity")
     if debt_to_equity is not None and debt_to_equity > 150:
         risk_penalty -= 1.5
-    if latest["change_20d_pct"] > 35:
-        risk_penalty -= 1.0
+    elif debt_to_equity is not None and debt_to_equity > 100:
+        risk_penalty -= 0.7
+    if latest["change_20d_pct"] > 18:
+        risk_penalty -= (latest["change_20d_pct"] - 18) * 0.18
+    if latest["change_60d_pct"] > 45:
+        risk_penalty -= (latest["change_60d_pct"] - 45) * 0.06
     if latest["volume_ratio_20"] > 4:
         risk_penalty -= 0.8
 
@@ -214,56 +242,63 @@ def run():
         name = row["name"]
         print(f"{idx + 1}/{len(tickers)} {ticker}")
 
-        hist = fetch_price_history(ticker)
-        if hist is None:
-            continue
+        ticker_obj = None
+        try:
+            ticker_obj = yf.Ticker(ticker)
+            hist = fetch_price_history(ticker_obj, ticker)
+            if hist is None:
+                continue
 
-        fundamentals = fetch_fundamentals(ticker)
-        if fundamentals is None:
-            continue
+            fundamentals = fetch_fundamentals(ticker_obj, ticker)
+            if fundamentals is None:
+                continue
 
-        hist = calc_indicators(hist)
-        latest = hist.iloc[-2]
-        latest_date = pd.Timestamp(hist.index[-2]).date()
+            hist = calc_indicators(hist)
+            latest = hist.iloc[-2]
+            latest_date = pd.Timestamp(hist.index[-2]).date()
 
-        if not passes_long_term_filter(latest, fundamentals):
-            time.sleep(SLEEP_SEC)
-            continue
+            if not passes_long_term_filter(latest, fundamentals):
+                time.sleep(SLEEP_SEC)
+                continue
 
-        screen_date = latest_date if screen_date is None else max(screen_date, latest_date)
-        score, trend_score, quality_score, strength_score = score_row(latest, fundamentals)
+            screen_date = latest_date if screen_date is None else max(screen_date, latest_date)
+            score, trend_score, quality_score, strength_score = score_row(latest, fundamentals)
 
-        rows.append(
-            {
-                "run_date": latest_date.isoformat(),
-                "screen_version": LONG_TERM_SCREEN_VERSION,
-                "generated_at": generated_at,
-                "ticker": ticker,
-                "name": name,
-                "score": score,
-                "trend_score": trend_score,
-                "quality_score": quality_score,
-                "strength_score": strength_score,
-                "close": round(float(latest["Close"]), 3),
-                "turnover_million": round(float(latest["turnover_million"]), 3),
-                "market_cap_billion": round((fundamentals["market_cap"] or 0.0) / 1_000_000_000, 3),
-                "revenue_growth_pct": round(fundamentals["revenue_growth_pct"], 3),
-                "profit_margin_pct": round(fundamentals["profit_margin_pct"], 3),
-                "roe_pct": round(fundamentals["roe_pct"], 3),
-                "current_ratio": round(fundamentals["current_ratio"], 3) if fundamentals["current_ratio"] is not None else None,
-                "debt_to_equity": round(fundamentals["debt_to_equity"], 3) if fundamentals["debt_to_equity"] is not None else None,
-                "change_20d_pct": round(float(latest["change_20d_pct"]), 3),
-                "change_60d_pct": round(float(latest["change_60d_pct"]), 3),
-                "change_120d_pct": round(float(latest["change_120d_pct"]), 3),
-                "gap_to_52w_high_pct": round(float(latest["gap_to_52w_high_pct"]), 3),
-                "volume_ratio_20": round(float(latest["volume_ratio_20"]), 3),
-                "ma25_slope_pct": round(float(latest["ma25_slope_pct"]), 3),
-                "ma75_slope_pct": round(float(latest["ma75_slope_pct"]), 3),
-                "ma200_slope_pct": round(float(latest["ma200_slope_pct"]), 3) if pd.notna(latest["ma200_slope_pct"]) else None,
-                "sector": fundamentals["sector"],
-                "industry": fundamentals["industry"],
-            }
-        )
+            rows.append(
+                {
+                    "run_date": latest_date.isoformat(),
+                    "screen_version": LONG_TERM_SCREEN_VERSION,
+                    "generated_at": generated_at,
+                    "ticker": ticker,
+                    "name": name,
+                    "score": score,
+                    "trend_score": trend_score,
+                    "quality_score": quality_score,
+                    "strength_score": strength_score,
+                    "close": round(float(latest["Close"]), 3),
+                    "turnover_million": round(float(latest["turnover_million"]), 3),
+                    "market_cap_billion": round((fundamentals["market_cap"] or 0.0) / 1_000_000_000, 3),
+                    "revenue_growth_pct": round(fundamentals["revenue_growth_pct"], 3),
+                    "profit_margin_pct": round(fundamentals["profit_margin_pct"], 3),
+                    "roe_pct": round(fundamentals["roe_pct"], 3),
+                    "current_ratio": round(fundamentals["current_ratio"], 3) if fundamentals["current_ratio"] is not None else None,
+                    "debt_to_equity": round(fundamentals["debt_to_equity"], 3) if fundamentals["debt_to_equity"] is not None else None,
+                    "change_20d_pct": round(float(latest["change_20d_pct"]), 3),
+                    "change_60d_pct": round(float(latest["change_60d_pct"]), 3),
+                    "change_120d_pct": round(float(latest["change_120d_pct"]), 3),
+                    "gap_to_52w_high_pct": round(float(latest["gap_to_52w_high_pct"]), 3),
+                    "volume_ratio_20": round(float(latest["volume_ratio_20"]), 3),
+                    "ma25_slope_pct": round(float(latest["ma25_slope_pct"]), 3),
+                    "ma75_slope_pct": round(float(latest["ma75_slope_pct"]), 3),
+                    "ma200_slope_pct": round(float(latest["ma200_slope_pct"]), 3) if pd.notna(latest["ma200_slope_pct"]) else None,
+                    "sector": fundamentals["sector"],
+                    "industry": fundamentals["industry"],
+                }
+            )
+        finally:
+            close_ticker_session(ticker_obj)
+        if (idx + 1) % 25 == 0:
+            gc.collect()
         time.sleep(SLEEP_SEC)
 
     df = pd.DataFrame(rows)
