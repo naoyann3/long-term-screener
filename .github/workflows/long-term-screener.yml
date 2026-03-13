@@ -1,0 +1,45 @@
+name: Long Term Stock Screener
+
+on:
+  workflow_dispatch:
+  schedule:
+    # 平日夜21:00 JST = 12:00 UTC
+    - cron: "0 12 * * 1-5"
+
+jobs:
+  run-long-term-screener:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+
+    env:
+      TZ: Asia/Tokyo
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pandas yfinance
+
+      - name: Set run date
+        run: |
+          echo "RUN_DATE=$(date +%F)" >> $GITHUB_ENV
+
+      - name: Run long term screener
+        run: |
+          python long_term_screener.py
+
+      - name: Upload result CSV files
+        uses: actions/upload-artifact@v4
+        with:
+          name: long-term-screener-results-${{ env.RUN_DATE }}
+          path: |
+            long_term_watchlist.csv
+            results/long_term_watchlists/*.csv
