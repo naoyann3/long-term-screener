@@ -34,7 +34,7 @@ COLUMN_LABELS = {
     "industry": "業種",
 }
 
-WATCHLIST_COLUMN_ORDER = [
+WATCHLIST_LATEST_COLUMN_ORDER = [
     "判定日",
     "監視順位",
     "ティッカー",
@@ -59,6 +59,37 @@ WATCHLIST_COLUMN_ORDER = [
     "業種",
 ]
 
+WATCHLIST_HISTORY_COLUMN_ORDER = [
+    "判定日",
+    "監視順位",
+    "ティッカー",
+    "銘柄名",
+    "総合スコア",
+    "トレンドスコア",
+    "業績スコア",
+    "強さスコア",
+    "終値",
+    "売買代金(百万円)",
+    "時価総額(十億円)",
+    "売上成長率(%)",
+    "利益率(%)",
+    "ROE(%)",
+    "流動比率",
+    "D/Eレシオ",
+    "20日騰落率(%)",
+    "60日騰落率(%)",
+    "120日騰落率(%)",
+    "52週高値差(%)",
+    "出来高倍率(20日)",
+    "25日線傾き(%)",
+    "75日線傾き(%)",
+    "200日線傾き(%)",
+    "セクター",
+    "業種",
+    "スクリーナー版",
+    "生成日時",
+]
+
 
 def _apply_order(df: pd.DataFrame, ordered_labels: list[str]) -> pd.DataFrame:
     ordered_existing = []
@@ -73,4 +104,9 @@ def _apply_order(df: pd.DataFrame, ordered_labels: list[str]) -> pd.DataFrame:
 
 def format_long_term_output(df: pd.DataFrame) -> pd.DataFrame:
     display_df = df.rename(columns=COLUMN_LABELS)
-    return _apply_order(display_df, WATCHLIST_COLUMN_ORDER)
+    return _apply_order(display_df, WATCHLIST_HISTORY_COLUMN_ORDER)
+
+
+def format_long_term_latest_output(df: pd.DataFrame) -> pd.DataFrame:
+    display_df = df.rename(columns=COLUMN_LABELS)
+    return display_df[[col for col in WATCHLIST_LATEST_COLUMN_ORDER if col in display_df.columns]]
