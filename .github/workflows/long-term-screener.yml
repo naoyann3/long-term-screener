@@ -17,6 +17,19 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Prepare persisted directories
+        run: |
+          mkdir -p results/long_term_watchlists
+
+      - name: Restore long-term history
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            results/long_term_watchlists
+          key: long-term-screener-history-${{ github.ref_name }}-${{ github.run_id }}
+          restore-keys: |
+            long-term-screener-history-${{ github.ref_name }}-
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
@@ -35,7 +48,16 @@ jobs:
         run: |
           python long_term_screener.py
 
+      - name: Save long-term history
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            results/long_term_watchlists
+          key: long-term-screener-history-${{ github.ref_name }}-${{ github.run_id }}
+
       - name: Upload result CSV files
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: long-term-screener-results-${{ env.RUN_DATE }}
