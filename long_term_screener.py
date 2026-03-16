@@ -9,7 +9,7 @@ import pandas as pd
 import yfinance as yf
 
 from config import LONG_TERM_SCREEN_VERSION, LONG_TERM_WATCHLISTS_DIR, ensure_results_dirs
-from output_format import format_long_term_output
+from output_format import format_long_term_latest_output, format_long_term_output
 
 TICKERS_CSV = "tickers.csv"
 OUTPUT_CSV = "long_term_watchlist.csv"
@@ -343,18 +343,19 @@ def run():
             "industry",
         ]
     ].head(TOP_N_OUTPUT)
-    export_df = format_long_term_output(output_df)
+    latest_export_df = format_long_term_latest_output(output_df)
+    history_export_df = format_long_term_output(output_df)
 
     if screen_date is None:
         screen_date = pd.Timestamp(output_df["run_date"].max()).date()
 
     latest_output_path = _latest_output_path()
     dated_output_path = LONG_TERM_WATCHLISTS_DIR / f"{screen_date.isoformat()}_{LONG_TERM_SCREEN_VERSION}_{run_stamp}.csv"
-    export_df.to_csv(latest_output_path, index=False, encoding="utf-8-sig")
-    export_df.to_csv(dated_output_path, index=False, encoding="utf-8-sig")
+    latest_export_df.to_csv(latest_output_path, index=False, encoding="utf-8-sig")
+    history_export_df.to_csv(dated_output_path, index=False, encoding="utf-8-sig")
 
     print("\n==== Long Term Watchlist ====")
-    print(export_df.to_string(index=False))
+    print(latest_export_df.to_string(index=False))
     print(f"\nCSV出力完了: {latest_output_path.name}")
     print(f"履歴保存完了: {dated_output_path}")
 
