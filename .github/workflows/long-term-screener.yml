@@ -26,6 +26,7 @@ jobs:
         with:
           path: |
             results/long_term_watchlists
+            universe_offset.txt
           key: long-term-screener-history-${{ github.ref_name }}-${{ github.run_id }}
           restore-keys: |
             long-term-screener-history-${{ github.ref_name }}-
@@ -54,6 +55,7 @@ jobs:
         with:
           path: |
             results/long_term_watchlists
+            universe_offset.txt
           key: long-term-screener-history-${{ github.ref_name }}-${{ github.run_id }}
 
       - name: Upload result CSV files
@@ -63,4 +65,5 @@ jobs:
           name: long-term-screener-results-${{ env.RUN_DATE }}
           path: |
             long_term_watchlist.csv
+            universe_offset.txt
             results/long_term_watchlists/*.csv
