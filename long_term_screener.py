@@ -13,6 +13,7 @@ from output_format import format_long_term_latest_output, format_long_term_outpu
 
 TICKERS_CSV = "tickers.csv"
 OUTPUT_CSV = "long_term_watchlist.csv"
+UNIVERSE_OFFSET_TXT = "universe_offset.txt"
 
 MAX_TICKERS = 250
 SLEEP_SEC = 0.8
@@ -36,13 +37,49 @@ def _latest_output_path() -> Path:
     return Path(__file__).resolve().parent / OUTPUT_CSV
 
 
+def _offset_path() -> Path:
+    return Path(__file__).resolve().parent / UNIVERSE_OFFSET_TXT
+
+
+def load_universe_offset(total_count: int) -> int:
+    if total_count <= 0:
+        return 0
+
+    path = _offset_path()
+    if not path.exists():
+        return 0
+
+    try:
+        raw = path.read_text(encoding="utf-8").strip()
+        if not raw:
+            return 0
+        return int(raw) % total_count
+    except Exception:
+        return 0
+
+
+def save_universe_offset(next_offset: int) -> None:
+    _offset_path().write_text(str(next_offset), encoding="utf-8")
+
+
 def load_tickers() -> pd.DataFrame:
     df = pd.read_csv(_ticker_path())
     df = df.dropna(subset=["ticker"])
     df["ticker"] = df["ticker"].astype(str).str.strip()
     if "name" not in df.columns:
         df["name"] = df["ticker"]
-    return df.head(MAX_TICKERS).reset_index(drop=True)
+
+    df = df.reset_index(drop=True)
+    total_count = len(df)
+    if total_count == 0:
+        return df
+
+    offset = load_universe_offset(total_count)
+    rotated = pd.concat([df.iloc[offset:], df.iloc[:offset]], ignore_index=True)
+    selected = rotated.head(MAX_TICKERS).reset_index(drop=True)
+    next_offset = (offset + MAX_TICKERS) % total_count
+    save_universe_offset(next_offset)
+    return selected
 
 
 def close_ticker_session(ticker_obj) -> None:
