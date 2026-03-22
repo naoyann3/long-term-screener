@@ -90,6 +90,54 @@ WATCHLIST_HISTORY_COLUMN_ORDER = [
     "生成日時",
 ]
 
+TRACKING_COLUMN_LABELS = {
+    "generated_at": "生成日時",
+    "ticker": "ティッカー",
+    "name": "銘柄名",
+    "entry_date": "取得日",
+    "entry_price": "取得単価",
+    "close": "終値",
+    "close_vs_entry_pct": "取得単価比(%)",
+    "close_vs_ma25_pct": "25日線乖離(%)",
+    "close_vs_ma75_pct": "75日線乖離(%)",
+    "close_vs_ma200_pct": "200日線乖離(%)",
+    "ma25_vs_ma75_pct": "25日線-75日線差(%)",
+    "ma75_vs_ma200_pct": "75日線-200日線差(%)",
+    "change_20d_pct": "20日騰落率(%)",
+    "change_60d_pct": "60日騰落率(%)",
+    "drawdown_from_60d_high_pct": "60日高値からの下落率(%)",
+    "volume_ratio_20": "出来高倍率(20日)",
+    "upper_shadow_pct": "上ヒゲ率(%)",
+    "status": "判定",
+    "status_score": "警戒スコア",
+    "warning_flags": "警戒サイン",
+    "note": "メモ",
+}
+
+TRACKING_COLUMN_ORDER = [
+    "判定",
+    "警戒スコア",
+    "ティッカー",
+    "銘柄名",
+    "取得日",
+    "取得単価",
+    "終値",
+    "取得単価比(%)",
+    "25日線乖離(%)",
+    "75日線乖離(%)",
+    "200日線乖離(%)",
+    "25日線-75日線差(%)",
+    "75日線-200日線差(%)",
+    "20日騰落率(%)",
+    "60日騰落率(%)",
+    "60日高値からの下落率(%)",
+    "出来高倍率(20日)",
+    "上ヒゲ率(%)",
+    "警戒サイン",
+    "メモ",
+    "生成日時",
+]
+
 
 def _apply_order(df: pd.DataFrame, ordered_labels: list[str]) -> pd.DataFrame:
     ordered_existing = []
@@ -110,3 +158,8 @@ def format_long_term_output(df: pd.DataFrame) -> pd.DataFrame:
 def format_long_term_latest_output(df: pd.DataFrame) -> pd.DataFrame:
     display_df = df.rename(columns=COLUMN_LABELS)
     return display_df[[col for col in WATCHLIST_LATEST_COLUMN_ORDER if col in display_df.columns]]
+
+
+def format_long_term_tracking_output(df: pd.DataFrame) -> pd.DataFrame:
+    display_df = df.rename(columns=TRACKING_COLUMN_LABELS)
+    return _apply_order(display_df, TRACKING_COLUMN_ORDER)
