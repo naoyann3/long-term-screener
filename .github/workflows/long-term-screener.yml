@@ -28,7 +28,6 @@ jobs:
           path: |
             results/long_term_watchlists
             results/long_term_tracking
-            tracked_tickers.csv
             universe_offset.txt
           key: long-term-screener-history-${{ github.ref_name }}-${{ github.run_id }}
           restore-keys: |
@@ -63,7 +62,6 @@ jobs:
           path: |
             results/long_term_watchlists
             results/long_term_tracking
-            tracked_tickers.csv
             universe_offset.txt
           key: long-term-screener-history-${{ github.ref_name }}-${{ github.run_id }}
 
