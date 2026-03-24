@@ -189,16 +189,16 @@ def calc_indicators(df: pd.DataFrame) -> pd.DataFrame:
     df["bearish_stack_recent"] = (
         df["bearish_stack"].rolling(BEARISH_ORDER_LOOKBACK, min_periods=1).max().fillna(0).astype(bool)
     )
-    df["initial_trend_signal"] = (
-        df["Close"] >= df["ma25"]
-    ) & df["perfect_order"] & df["bearish_stack_recent"] & (
-        df["ma25_cross_75_recent_tight"]
-        | df["ma25_cross_200_recent_tight"]
-        | df["ma75_cross_200_recent_tight"]
-    )
     df["ma25_slope_pct"] = (df["ma25"] - df["ma25"].shift(5)) / df["ma25"].shift(5) * 100
     df["ma75_slope_pct"] = (df["ma75"] - df["ma75"].shift(5)) / df["ma75"].shift(5) * 100
     df["ma200_slope_pct"] = (df["ma200"] - df["ma200"].shift(5)) / df["ma200"].shift(5) * 100
+    df["initial_trend_signal"] = (
+        (df["Close"] >= df["ma25"])
+        & df["perfect_order"]
+        & (df["ma25_slope_pct"] > 0)
+        & (df["ma75_slope_pct"] > 0)
+        & df["ma75_cross_200_recent_tight"]
+    )
     df["vol_avg20"] = df["Volume"].rolling(20).mean()
     df["turnover"] = df["Close"] * df["Volume"]
     df["turnover_million"] = df["turnover"] / 1_000_000
@@ -303,16 +303,12 @@ def score_row(latest: pd.Series, fundamentals: dict) -> tuple[float, float, floa
         risk_penalty -= (latest["change_60d_pct"] - 45) * 0.06
     if latest["volume_ratio_20"] > 4:
         risk_penalty -= 0.8
-    if latest["ma25_cross_200_recent_tight"]:
-        strength_score += 1.2
     if latest["ma75_cross_200_recent_tight"]:
-        strength_score += 1.8
-    if latest["ma25_cross_75_recent_tight"]:
         strength_score += 1.0
-    if latest["perfect_order_recent"]:
-        strength_score += 0.7
+    if latest["ma25_cross_75_recent_tight"]:
+        strength_score += 0.6
     if latest["initial_trend_signal"]:
-        strength_score += 2.0
+        strength_score += 3.0
 
     total = trend_score + quality_score + strength_score + risk_penalty
     return round(total, 2), round(trend_score, 2), round(quality_score, 2), round(strength_score + risk_penalty, 2)
