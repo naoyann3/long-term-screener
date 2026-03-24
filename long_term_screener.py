@@ -9,15 +9,18 @@ import pandas as pd
 import yfinance as yf
 
 from config import LONG_TERM_SCREEN_VERSION, LONG_TERM_WATCHLISTS_DIR, ensure_results_dirs
-from output_format import format_long_term_latest_output, format_long_term_output
+from output_format import format_long_term_gc_output, format_long_term_latest_output, format_long_term_output
 
 TICKERS_CSV = "tickers.csv"
 OUTPUT_CSV = "long_term_watchlist.csv"
+GC_OUTPUT_CSV = "long_term_gc_watchlist.csv"
 UNIVERSE_OFFSET_TXT = "universe_offset.txt"
+GC_WATCHLISTS_DIRNAME = "long_term_gc_watchlists"
 
 MAX_TICKERS = 250
 SLEEP_SEC = 0.8
 TOP_N_OUTPUT = 50
+TOP_N_GC_OUTPUT = 20
 
 MIN_TURNOVER = 100_000_000
 MIN_MARKET_CAP = 30_000_000_000
@@ -40,8 +43,16 @@ def _latest_output_path() -> Path:
     return Path(__file__).resolve().parent / OUTPUT_CSV
 
 
+def _latest_gc_output_path() -> Path:
+    return Path(__file__).resolve().parent / GC_OUTPUT_CSV
+
+
 def _offset_path() -> Path:
     return Path(__file__).resolve().parent / UNIVERSE_OFFSET_TXT
+
+
+def _gc_watchlists_dir() -> Path:
+    return Path(__file__).resolve().parent / "results" / GC_WATCHLISTS_DIRNAME
 
 
 def load_universe_offset(total_count: int) -> int:
@@ -192,6 +203,7 @@ def calc_indicators(df: pd.DataFrame) -> pd.DataFrame:
     df["ma25_slope_pct"] = (df["ma25"] - df["ma25"].shift(5)) / df["ma25"].shift(5) * 100
     df["ma75_slope_pct"] = (df["ma75"] - df["ma75"].shift(5)) / df["ma75"].shift(5) * 100
     df["ma200_slope_pct"] = (df["ma200"] - df["ma200"].shift(5)) / df["ma200"].shift(5) * 100
+    df["close_vs_ma25_pct"] = (df["Close"] - df["ma25"]) / df["ma25"] * 100
     df["initial_trend_signal"] = (
         (df["Close"] >= df["ma25"])
         & df["perfect_order"]
@@ -208,6 +220,9 @@ def calc_indicators(df: pd.DataFrame) -> pd.DataFrame:
     df["recent_high_252"] = df["High"].rolling(252, min_periods=120).max()
     df["gap_to_52w_high_pct"] = (df["recent_high_252"] - df["Close"]) / df["Close"] * 100
     df["volume_ratio_20"] = df["Volume"] / df["vol_avg20"]
+    cross_positions = pd.Series(range(len(df)), index=df.index).where(df["ma75_cross_200_today"])
+    df["days_since_75gc200"] = pd.Series(range(len(df)), index=df.index) - cross_positions.ffill()
+    df.loc[cross_positions.ffill().isna(), "days_since_75gc200"] = pd.NA
     return df
 
 
@@ -377,6 +392,8 @@ def run():
                     "ma25_slope_pct": round(float(latest["ma25_slope_pct"]), 3),
                     "ma75_slope_pct": round(float(latest["ma75_slope_pct"]), 3),
                     "ma200_slope_pct": round(float(latest["ma200_slope_pct"]), 3) if pd.notna(latest["ma200_slope_pct"]) else None,
+                    "close_vs_ma25_pct": round(float(latest["close_vs_ma25_pct"]), 3) if pd.notna(latest["close_vs_ma25_pct"]) else None,
+                    "days_since_75gc200": int(latest["days_since_75gc200"]) if pd.notna(latest["days_since_75gc200"]) else None,
                     "ma25_above_ma200": bool(latest["ma25_above_ma200"]),
                     "ma75_above_ma200": bool(latest["ma75_above_ma200"]),
                     "ma25_above_ma75": bool(latest["ma25_above_ma75"]),
@@ -437,6 +454,8 @@ def run():
             "ma25_slope_pct",
             "ma75_slope_pct",
             "ma200_slope_pct",
+            "close_vs_ma25_pct",
+            "days_since_75gc200",
             "ma25_above_ma200",
             "ma75_above_ma200",
             "ma25_above_ma75",
@@ -458,19 +477,80 @@ def run():
     ].head(TOP_N_OUTPUT)
     latest_export_df = format_long_term_latest_output(output_df)
     history_export_df = format_long_term_output(output_df)
+    gc_df = df[
+        df["initial_trend_signal"]
+        & df["days_since_75gc200"].notna()
+        & (df["days_since_75gc200"] <= PERFECT_ORDER_LOOKBACK)
+        & df["close_vs_ma25_pct"].notna()
+        & (df["close_vs_ma25_pct"] >= -1.0)
+        & (df["close_vs_ma25_pct"] <= 8.0)
+    ].copy()
+    gc_df = gc_df.sort_values(
+        ["days_since_75gc200", "score", "trend_score"],
+        ascending=[True, False, False],
+    ).reset_index(drop=True)
+    gc_df["rank"] = gc_df.index + 1
+    gc_output_df = gc_df[
+        [
+            "run_date",
+            "screen_version",
+            "generated_at",
+            "rank",
+            "ticker",
+            "name",
+            "initial_trend_signal",
+            "days_since_75gc200",
+            "close_vs_ma25_pct",
+            "perfect_order_recent",
+            "ma25_cross_75_recent_tight",
+            "ma25_cross_200_recent_tight",
+            "ma75_cross_200_recent_tight",
+            "score",
+            "trend_score",
+            "quality_score",
+            "strength_score",
+            "close",
+            "turnover_million",
+            "market_cap_billion",
+            "revenue_growth_pct",
+            "profit_margin_pct",
+            "roe_pct",
+            "change_20d_pct",
+            "change_60d_pct",
+            "gap_to_52w_high_pct",
+            "volume_ratio_20",
+            "ma25_slope_pct",
+            "ma75_slope_pct",
+            "ma25_above_ma75",
+            "ma25_above_ma200",
+            "ma75_above_ma200",
+            "perfect_order",
+            "sector",
+            "industry",
+        ]
+    ].head(TOP_N_GC_OUTPUT)
+    gc_export_df = format_long_term_gc_output(gc_output_df)
 
     if screen_date is None:
         screen_date = pd.Timestamp(output_df["run_date"].max()).date()
 
     latest_output_path = _latest_output_path()
+    latest_gc_output_path = _latest_gc_output_path()
     dated_output_path = LONG_TERM_WATCHLISTS_DIR / f"{screen_date.isoformat()}_{LONG_TERM_SCREEN_VERSION}_{run_stamp}.csv"
+    gc_watchlists_dir = _gc_watchlists_dir()
+    gc_watchlists_dir.mkdir(parents=True, exist_ok=True)
+    dated_gc_output_path = gc_watchlists_dir / f"{screen_date.isoformat()}_{LONG_TERM_SCREEN_VERSION}_{run_stamp}.csv"
     latest_export_df.to_csv(latest_output_path, index=False, encoding="utf-8-sig")
     history_export_df.to_csv(dated_output_path, index=False, encoding="utf-8-sig")
+    gc_export_df.to_csv(latest_gc_output_path, index=False, encoding="utf-8-sig")
+    gc_export_df.to_csv(dated_gc_output_path, index=False, encoding="utf-8-sig")
 
     print("\n==== Long Term Watchlist ====")
     print(latest_export_df.to_string(index=False))
     print(f"\nCSV出力完了: {latest_output_path.name}")
     print(f"履歴保存完了: {dated_output_path}")
+    print(f"GC専用出力完了: {latest_gc_output_path.name}")
+    print(f"GC専用履歴保存完了: {dated_gc_output_path}")
 
 
 if __name__ == "__main__":

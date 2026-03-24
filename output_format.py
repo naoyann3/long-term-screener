@@ -45,6 +45,8 @@ COLUMN_LABELS = {
     "ma75_cross_200_recent_tight": "75日GC200(直近厳選)",
     "perfect_order_recent": "PO形成(直近)",
     "initial_trend_signal": "初動75GC200シグナル",
+    "days_since_75gc200": "75日GC200からの日数",
+    "close_vs_ma25_pct": "25日線乖離(%)",
     "sector": "セクター",
     "industry": "業種",
 }
@@ -117,6 +119,41 @@ WATCHLIST_HISTORY_COLUMN_ORDER = [
     "業種",
 ]
 
+GC_WATCHLIST_COLUMN_ORDER = [
+    "判定日",
+    "監視順位",
+    "ティッカー",
+    "銘柄名",
+    "初動75GC200シグナル",
+    "75日GC200からの日数",
+    "25日線乖離(%)",
+    "PO形成(直近)",
+    "25日GC75(直近)",
+    "75日GC200(直近厳選)",
+    "総合スコア",
+    "トレンドスコア",
+    "業績スコア",
+    "強さスコア",
+    "終値",
+    "売買代金(百万円)",
+    "時価総額(十億円)",
+    "売上成長率(%)",
+    "利益率(%)",
+    "ROE(%)",
+    "20日騰落率(%)",
+    "60日騰落率(%)",
+    "52週高値差(%)",
+    "出来高倍率(20日)",
+    "25日線傾き(%)",
+    "75日線傾き(%)",
+    "25日線>75日線",
+    "25日線>200日線",
+    "75日線>200日線",
+    "PO(25>75>200)",
+    "セクター",
+    "業種",
+]
+
 TRACKING_COLUMN_LABELS = {
     "generated_at": "生成日時",
     "ticker": "ティッカー",
@@ -185,6 +222,11 @@ def format_long_term_output(df: pd.DataFrame) -> pd.DataFrame:
 def format_long_term_latest_output(df: pd.DataFrame) -> pd.DataFrame:
     display_df = df.rename(columns=COLUMN_LABELS)
     return display_df[[col for col in WATCHLIST_LATEST_COLUMN_ORDER if col in display_df.columns]]
+
+
+def format_long_term_gc_output(df: pd.DataFrame) -> pd.DataFrame:
+    display_df = df.rename(columns=COLUMN_LABELS)
+    return _apply_order(display_df, GC_WATCHLIST_COLUMN_ORDER)
 
 
 def format_long_term_tracking_output(df: pd.DataFrame) -> pd.DataFrame:
