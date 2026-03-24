@@ -28,6 +28,8 @@ MAX_52W_HIGH_GAP_PCT = 20.0
 MAX_CHANGE_20D_PCT = 25.0
 MAX_CHANGE_60D_PCT = 80.0
 RECENT_CROSS_LOOKBACK = 10
+PERFECT_ORDER_LOOKBACK = 5
+BEARISH_ORDER_LOOKBACK = 60
 
 
 def _ticker_path() -> Path:
@@ -167,9 +169,33 @@ def calc_indicators(df: pd.DataFrame) -> pd.DataFrame:
     df["ma75_cross_200_recent"] = (
         df["ma75_cross_200_today"].rolling(RECENT_CROSS_LOOKBACK, min_periods=1).max().fillna(0).astype(bool)
     )
+    df["ma25_above_ma75"] = df["ma25"] > df["ma75"]
+    df["ma75_above_ma200"] = df["ma75"] > df["ma200"]
+    df["perfect_order"] = df["ma25_above_ma75"] & df["ma75_above_ma200"]
+    df["bearish_stack"] = (df["ma200"] > df["ma75"]) & (df["ma75"] > df["ma25"])
+    df["ma25_cross_75_today"] = df["ma25_above_ma75"] & (~df["ma25_above_ma75"].shift(1).fillna(False))
+    df["ma75_cross_200_recent_tight"] = (
+        df["ma75_cross_200_today"].rolling(PERFECT_ORDER_LOOKBACK, min_periods=1).max().fillna(0).astype(bool)
+    )
+    df["ma25_cross_200_recent_tight"] = (
+        df["ma25_cross_200_today"].rolling(PERFECT_ORDER_LOOKBACK, min_periods=1).max().fillna(0).astype(bool)
+    )
+    df["ma25_cross_75_recent_tight"] = (
+        df["ma25_cross_75_today"].rolling(PERFECT_ORDER_LOOKBACK, min_periods=1).max().fillna(0).astype(bool)
+    )
+    df["perfect_order_recent"] = (
+        df["perfect_order"].rolling(PERFECT_ORDER_LOOKBACK, min_periods=1).max().fillna(0).astype(bool)
+    )
+    df["bearish_stack_recent"] = (
+        df["bearish_stack"].rolling(BEARISH_ORDER_LOOKBACK, min_periods=1).max().fillna(0).astype(bool)
+    )
     df["initial_trend_signal"] = (
-        df["ma25_cross_200_recent"] | df["ma75_cross_200_recent"]
-    ) & (df["Close"] >= df["ma25"])
+        df["Close"] >= df["ma25"]
+    ) & df["perfect_order"] & df["bearish_stack_recent"] & (
+        df["ma25_cross_75_recent_tight"]
+        | df["ma25_cross_200_recent_tight"]
+        | df["ma75_cross_200_recent_tight"]
+    )
     df["ma25_slope_pct"] = (df["ma25"] - df["ma25"].shift(5)) / df["ma25"].shift(5) * 100
     df["ma75_slope_pct"] = (df["ma75"] - df["ma75"].shift(5)) / df["ma75"].shift(5) * 100
     df["ma200_slope_pct"] = (df["ma200"] - df["ma200"].shift(5)) / df["ma200"].shift(5) * 100
@@ -277,12 +303,16 @@ def score_row(latest: pd.Series, fundamentals: dict) -> tuple[float, float, floa
         risk_penalty -= (latest["change_60d_pct"] - 45) * 0.06
     if latest["volume_ratio_20"] > 4:
         risk_penalty -= 0.8
-    if latest["ma25_cross_200_recent"]:
+    if latest["ma25_cross_200_recent_tight"]:
         strength_score += 1.2
-    if latest["ma75_cross_200_recent"]:
+    if latest["ma75_cross_200_recent_tight"]:
         strength_score += 1.8
-    if latest["initial_trend_signal"]:
+    if latest["ma25_cross_75_recent_tight"]:
         strength_score += 1.0
+    if latest["perfect_order_recent"]:
+        strength_score += 0.7
+    if latest["initial_trend_signal"]:
+        strength_score += 2.0
 
     total = trend_score + quality_score + strength_score + risk_penalty
     return round(total, 2), round(trend_score, 2), round(quality_score, 2), round(strength_score + risk_penalty, 2)
@@ -353,10 +383,18 @@ def run():
                     "ma200_slope_pct": round(float(latest["ma200_slope_pct"]), 3) if pd.notna(latest["ma200_slope_pct"]) else None,
                     "ma25_above_ma200": bool(latest["ma25_above_ma200"]),
                     "ma75_above_ma200": bool(latest["ma75_above_ma200"]),
+                    "ma25_above_ma75": bool(latest["ma25_above_ma75"]),
+                    "perfect_order": bool(latest["perfect_order"]),
+                    "bearish_stack_recent": bool(latest["bearish_stack_recent"]),
                     "ma25_cross_200_today": bool(latest["ma25_cross_200_today"]),
                     "ma75_cross_200_today": bool(latest["ma75_cross_200_today"]),
                     "ma25_cross_200_recent": bool(latest["ma25_cross_200_recent"]),
                     "ma75_cross_200_recent": bool(latest["ma75_cross_200_recent"]),
+                    "ma25_cross_75_today": bool(latest["ma25_cross_75_today"]),
+                    "ma25_cross_75_recent_tight": bool(latest["ma25_cross_75_recent_tight"]),
+                    "ma25_cross_200_recent_tight": bool(latest["ma25_cross_200_recent_tight"]),
+                    "ma75_cross_200_recent_tight": bool(latest["ma75_cross_200_recent_tight"]),
+                    "perfect_order_recent": bool(latest["perfect_order_recent"]),
                     "initial_trend_signal": bool(latest["initial_trend_signal"]),
                     "sector": fundamentals["sector"],
                     "industry": fundamentals["industry"],
@@ -405,10 +443,18 @@ def run():
             "ma200_slope_pct",
             "ma25_above_ma200",
             "ma75_above_ma200",
+            "ma25_above_ma75",
+            "perfect_order",
+            "bearish_stack_recent",
             "ma25_cross_200_today",
             "ma75_cross_200_today",
             "ma25_cross_200_recent",
             "ma75_cross_200_recent",
+            "ma25_cross_75_today",
+            "ma25_cross_75_recent_tight",
+            "ma25_cross_200_recent_tight",
+            "ma75_cross_200_recent_tight",
+            "perfect_order_recent",
             "initial_trend_signal",
             "sector",
             "industry",
