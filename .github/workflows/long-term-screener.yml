@@ -21,6 +21,7 @@ jobs:
         run: |
           mkdir -p results/long_term_watchlists
           mkdir -p results/long_term_tracking
+          mkdir -p results/long_term_gc_watchlists
 
       - name: Restore long-term history
         uses: actions/cache/restore@v4
@@ -28,6 +29,7 @@ jobs:
           path: |
             results/long_term_watchlists
             results/long_term_tracking
+            results/long_term_gc_watchlists
             universe_offset.txt
           key: long-term-screener-history-${{ github.ref_name }}-${{ github.run_id }}
           restore-keys: |
@@ -51,7 +53,7 @@ jobs:
         run: |
           python long_term_screener.py
 
-      - name: Track selected positions
+      - name: Run long term tracking
         run: |
           python track_long_term_positions.py
 
@@ -62,6 +64,7 @@ jobs:
           path: |
             results/long_term_watchlists
             results/long_term_tracking
+            results/long_term_gc_watchlists
             universe_offset.txt
           key: long-term-screener-history-${{ github.ref_name }}-${{ github.run_id }}
 
@@ -72,8 +75,10 @@ jobs:
           name: long-term-screener-results-${{ env.RUN_DATE }}
           path: |
             long_term_watchlist.csv
+            long_term_gc_watchlist.csv
             long_term_tracking.csv
             tracked_tickers.csv
             universe_offset.txt
             results/long_term_watchlists/*.csv
+            results/long_term_gc_watchlists/*.csv
             results/long_term_tracking/*.csv
