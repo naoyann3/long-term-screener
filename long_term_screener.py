@@ -27,6 +27,7 @@ MIN_ROE_PCT = 8.0
 MAX_52W_HIGH_GAP_PCT = 20.0
 MAX_CHANGE_20D_PCT = 25.0
 MAX_CHANGE_60D_PCT = 80.0
+RECENT_CROSS_LOOKBACK = 10
 
 
 def _ticker_path() -> Path:
@@ -156,6 +157,19 @@ def calc_indicators(df: pd.DataFrame) -> pd.DataFrame:
     df["ma25"] = df["Close"].rolling(25).mean()
     df["ma75"] = df["Close"].rolling(75).mean()
     df["ma200"] = df["Close"].rolling(200).mean()
+    df["ma25_above_ma200"] = df["ma25"] > df["ma200"]
+    df["ma75_above_ma200"] = df["ma75"] > df["ma200"]
+    df["ma25_cross_200_today"] = df["ma25_above_ma200"] & (~df["ma25_above_ma200"].shift(1).fillna(False))
+    df["ma75_cross_200_today"] = df["ma75_above_ma200"] & (~df["ma75_above_ma200"].shift(1).fillna(False))
+    df["ma25_cross_200_recent"] = (
+        df["ma25_cross_200_today"].rolling(RECENT_CROSS_LOOKBACK, min_periods=1).max().fillna(0).astype(bool)
+    )
+    df["ma75_cross_200_recent"] = (
+        df["ma75_cross_200_today"].rolling(RECENT_CROSS_LOOKBACK, min_periods=1).max().fillna(0).astype(bool)
+    )
+    df["initial_trend_signal"] = (
+        df["ma25_cross_200_recent"] | df["ma75_cross_200_recent"]
+    ) & (df["Close"] >= df["ma25"])
     df["ma25_slope_pct"] = (df["ma25"] - df["ma25"].shift(5)) / df["ma25"].shift(5) * 100
     df["ma75_slope_pct"] = (df["ma75"] - df["ma75"].shift(5)) / df["ma75"].shift(5) * 100
     df["ma200_slope_pct"] = (df["ma200"] - df["ma200"].shift(5)) / df["ma200"].shift(5) * 100
@@ -263,6 +277,12 @@ def score_row(latest: pd.Series, fundamentals: dict) -> tuple[float, float, floa
         risk_penalty -= (latest["change_60d_pct"] - 45) * 0.06
     if latest["volume_ratio_20"] > 4:
         risk_penalty -= 0.8
+    if latest["ma25_cross_200_recent"]:
+        strength_score += 1.2
+    if latest["ma75_cross_200_recent"]:
+        strength_score += 1.8
+    if latest["initial_trend_signal"]:
+        strength_score += 1.0
 
     total = trend_score + quality_score + strength_score + risk_penalty
     return round(total, 2), round(trend_score, 2), round(quality_score, 2), round(strength_score + risk_penalty, 2)
@@ -331,6 +351,13 @@ def run():
                     "ma25_slope_pct": round(float(latest["ma25_slope_pct"]), 3),
                     "ma75_slope_pct": round(float(latest["ma75_slope_pct"]), 3),
                     "ma200_slope_pct": round(float(latest["ma200_slope_pct"]), 3) if pd.notna(latest["ma200_slope_pct"]) else None,
+                    "ma25_above_ma200": bool(latest["ma25_above_ma200"]),
+                    "ma75_above_ma200": bool(latest["ma75_above_ma200"]),
+                    "ma25_cross_200_today": bool(latest["ma25_cross_200_today"]),
+                    "ma75_cross_200_today": bool(latest["ma75_cross_200_today"]),
+                    "ma25_cross_200_recent": bool(latest["ma25_cross_200_recent"]),
+                    "ma75_cross_200_recent": bool(latest["ma75_cross_200_recent"]),
+                    "initial_trend_signal": bool(latest["initial_trend_signal"]),
                     "sector": fundamentals["sector"],
                     "industry": fundamentals["industry"],
                 }
@@ -376,6 +403,13 @@ def run():
             "ma25_slope_pct",
             "ma75_slope_pct",
             "ma200_slope_pct",
+            "ma25_above_ma200",
+            "ma75_above_ma200",
+            "ma25_cross_200_today",
+            "ma75_cross_200_today",
+            "ma25_cross_200_recent",
+            "ma75_cross_200_recent",
+            "initial_trend_signal",
             "sector",
             "industry",
         ]
