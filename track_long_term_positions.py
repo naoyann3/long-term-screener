@@ -93,10 +93,17 @@ def add_indicators(df: pd.DataFrame) -> pd.DataFrame:
     df["ma200"] = df["Close"].rolling(200).mean()
     df["vol_avg20"] = df["Volume"].rolling(20).mean()
     df["volume_ratio_20"] = df["Volume"] / df["vol_avg20"]
+    df["volume_ratio_20_prev"] = df["volume_ratio_20"].shift(1)
     df["change_20d_pct"] = (df["Close"] - df["Close"].shift(20)) / df["Close"].shift(20) * 100
     df["change_60d_pct"] = (df["Close"] - df["Close"].shift(60)) / df["Close"].shift(60) * 100
     df["high_60"] = df["High"].rolling(60).max()
     df["drawdown_from_60d_high_pct"] = (df["Close"] - df["high_60"]) / df["high_60"] * 100
+    df["close_below_ma75"] = df["Close"] < df["ma75"]
+    df["close_below_ma75_2d"] = df["close_below_ma75"] & df["close_below_ma75"].shift(1).fillna(False)
+    df["ma25_below_ma75"] = df["ma25"] < df["ma75"]
+    df["ma25_cross_below_75_today"] = df["ma25_below_ma75"] & (~df["ma25_below_ma75"].shift(1).fillna(False))
+    df["recent_high_20"] = df["High"].rolling(20).max()
+    df["days_from_20d_high"] = (pd.Series(range(len(df)), index=df.index) - pd.Series(range(len(df)), index=df.index).where(df["High"] >= df["recent_high_20"])).ffill()
     return df
 
 
@@ -122,42 +129,48 @@ def judge_status(latest: pd.Series) -> tuple[str, int, list[str]]:
     flags: list[str] = []
     score = 0
 
+    if latest["close_below_ma75_2d"]:
+        score += 4
+        flags.append("終値が75日線を2日連続で割れ")
+
+    if latest["ma25_cross_below_75_today"]:
+        score += 5
+        flags.append("25日線が75日線を再DC")
+
     if latest["Close"] < latest["ma25"]:
         score += 1
         flags.append("終値が25日線割れ")
-    if latest["Close"] < latest["ma75"]:
-        score += 2
-        flags.append("終値が75日線割れ")
-    if pd.notna(latest["ma200"]) and latest["Close"] < latest["ma200"]:
-        score += 2
-        flags.append("終値が200日線割れ")
-    if latest["ma25"] < latest["ma75"]:
-        score += 2
-        flags.append("25日線が75日線を下回る")
-    if pd.notna(latest["ma200"]) and latest["ma75"] < latest["ma200"]:
-        score += 2
-        flags.append("75日線が200日線を下回る")
+
     if latest["drawdown_from_60d_high_pct"] <= -12:
         score += 2
         flags.append("60日高値から大きく下落")
     elif latest["drawdown_from_60d_high_pct"] <= -8:
         score += 1
         flags.append("60日高値から下落")
+
     if latest["change_20d_pct"] < -8:
         score += 1
         flags.append("20日騰落率が悪化")
-    if latest["volume_ratio_20"] >= 2.5 and upper_shadow_pct(latest) >= 45:
-        score += 1
-        flags.append("出来高急増+長い上ヒゲ")
 
-    if score >= 6:
-        status = "撤退候補"
+    high_failure = pd.notna(latest["days_from_20d_high"]) and float(latest["days_from_20d_high"]) >= 5
+    volume_fading = (
+        pd.notna(latest["volume_ratio_20_prev"])
+        and latest["volume_ratio_20"] < latest["volume_ratio_20_prev"]
+        and latest["volume_ratio_20"] < 1.0
+    )
+    long_upper_shadow = upper_shadow_pct(latest) >= 45
+    if high_failure and volume_fading and long_upper_shadow:
+        score += 2
+        flags.append("出来高減少+上ヒゲ+高値更新失敗")
+
+    if latest["ma25"] > latest["ma75"] and latest["Close"] >= latest["ma75"] and score == 0:
+        status = "継続"
+    elif latest["ma25_cross_below_75_today"] or latest["close_below_ma75_2d"]:
+        status = "撤退"
     elif score >= 3:
         status = "警戒"
-    elif flags:
-        status = "継続(注意)"
     else:
-        status = "継続"
+        status = "継続(注意)"
     return status, score, flags
 
 
