@@ -33,6 +33,7 @@ MAX_CHANGE_60D_PCT = 80.0
 RECENT_CROSS_LOOKBACK = 10
 PERFECT_ORDER_LOOKBACK = 5
 BEARISH_ORDER_LOOKBACK = 60
+REVERSAL_LOOKBACK = 10
 
 
 def _ticker_path() -> Path:
@@ -184,6 +185,7 @@ def calc_indicators(df: pd.DataFrame) -> pd.DataFrame:
     df["ma75_above_ma200"] = df["ma75"] > df["ma200"]
     df["perfect_order"] = df["ma25_above_ma75"] & df["ma75_above_ma200"]
     df["bearish_stack"] = (df["ma200"] > df["ma75"]) & (df["ma75"] > df["ma25"])
+    df["bearish_perfect_order"] = df["bearish_stack"]
     df["ma25_cross_75_today"] = df["ma25_above_ma75"] & (~df["ma25_above_ma75"].shift(1).fillna(False))
     df["ma75_cross_200_recent_tight"] = (
         df["ma75_cross_200_today"].rolling(PERFECT_ORDER_LOOKBACK, min_periods=1).max().fillna(0).astype(bool)
@@ -197,19 +199,47 @@ def calc_indicators(df: pd.DataFrame) -> pd.DataFrame:
     df["perfect_order_recent"] = (
         df["perfect_order"].rolling(PERFECT_ORDER_LOOKBACK, min_periods=1).max().fillna(0).astype(bool)
     )
+    df["perfect_order_today"] = df["perfect_order"] & (~df["perfect_order"].shift(1).fillna(False))
+    df["perfect_order_recent_tight"] = (
+        df["perfect_order_today"].rolling(REVERSAL_LOOKBACK, min_periods=1).max().fillna(0).astype(bool)
+    )
     df["bearish_stack_recent"] = (
         df["bearish_stack"].rolling(BEARISH_ORDER_LOOKBACK, min_periods=1).max().fillna(0).astype(bool)
+    )
+    df["bearish_perfect_order_recent"] = (
+        df["bearish_perfect_order"].shift(1).rolling(BEARISH_ORDER_LOOKBACK, min_periods=1).max().fillna(0).astype(bool)
     )
     df["ma25_slope_pct"] = (df["ma25"] - df["ma25"].shift(5)) / df["ma25"].shift(5) * 100
     df["ma75_slope_pct"] = (df["ma75"] - df["ma75"].shift(5)) / df["ma75"].shift(5) * 100
     df["ma200_slope_pct"] = (df["ma200"] - df["ma200"].shift(5)) / df["ma200"].shift(5) * 100
     df["close_vs_ma25_pct"] = (df["Close"] - df["ma25"]) / df["ma25"] * 100
+    df["close_vs_ma75_pct"] = (df["Close"] - df["ma75"]) / df["ma75"] * 100
     df["initial_trend_signal"] = (
         (df["Close"] >= df["ma25"])
         & df["perfect_order"]
         & (df["ma25_slope_pct"] > 0)
         & (df["ma75_slope_pct"] > 0)
         & df["ma75_cross_200_recent_tight"]
+    )
+    df["reversal_from_bearish_po"] = (
+        df["bearish_perfect_order_recent"]
+        & df["perfect_order"]
+        & df["perfect_order_recent_tight"]
+        & df["ma25_cross_75_recent_tight"]
+        & df["ma75_cross_200_recent_tight"]
+        & (df["Close"] >= df["ma25"])
+        & (df["close_vs_ma25_pct"].between(-2.0, 10.0))
+        & (df["ma25_slope_pct"] > 0)
+        & (df["ma75_slope_pct"] > 0)
+    )
+    df["early_reversal_setup"] = (
+        df["bearish_perfect_order_recent"]
+        & (df["Close"] >= df["ma75"])
+        & df["ma25_cross_75_recent_tight"]
+        & (df["ma75_cross_200_recent_tight"] | df["ma25_cross_200_recent_tight"])
+        & (df["ma25_slope_pct"] > 0)
+        & (df["ma75_slope_pct"] > 0)
+        & (df["close_vs_ma25_pct"].between(-3.0, 8.0))
     )
     df["vol_avg20"] = df["Volume"].rolling(20).mean()
     df["turnover"] = df["Close"] * df["Volume"]
@@ -223,6 +253,9 @@ def calc_indicators(df: pd.DataFrame) -> pd.DataFrame:
     cross_positions = pd.Series(range(len(df)), index=df.index).where(df["ma75_cross_200_today"])
     df["days_since_75gc200"] = pd.Series(range(len(df)), index=df.index) - cross_positions.ffill()
     df.loc[cross_positions.ffill().isna(), "days_since_75gc200"] = pd.NA
+    po_positions = pd.Series(range(len(df)), index=df.index).where(df["perfect_order_today"])
+    df["days_since_perfect_order"] = pd.Series(range(len(df)), index=df.index) - po_positions.ffill()
+    df.loc[po_positions.ffill().isna(), "days_since_perfect_order"] = pd.NA
     return df
 
 
@@ -324,6 +357,10 @@ def score_row(latest: pd.Series, fundamentals: dict) -> tuple[float, float, floa
         strength_score += 0.6
     if latest["initial_trend_signal"]:
         strength_score += 3.0
+    if latest["early_reversal_setup"]:
+        strength_score += 2.5
+    if latest["reversal_from_bearish_po"]:
+        strength_score += 4.0
 
     total = trend_score + quality_score + strength_score + risk_penalty
     return round(total, 2), round(trend_score, 2), round(quality_score, 2), round(strength_score + risk_penalty, 2)
@@ -393,12 +430,15 @@ def run():
                     "ma75_slope_pct": round(float(latest["ma75_slope_pct"]), 3),
                     "ma200_slope_pct": round(float(latest["ma200_slope_pct"]), 3) if pd.notna(latest["ma200_slope_pct"]) else None,
                     "close_vs_ma25_pct": round(float(latest["close_vs_ma25_pct"]), 3) if pd.notna(latest["close_vs_ma25_pct"]) else None,
+                    "close_vs_ma75_pct": round(float(latest["close_vs_ma75_pct"]), 3) if pd.notna(latest["close_vs_ma75_pct"]) else None,
                     "days_since_75gc200": int(latest["days_since_75gc200"]) if pd.notna(latest["days_since_75gc200"]) else None,
+                    "days_since_perfect_order": int(latest["days_since_perfect_order"]) if pd.notna(latest["days_since_perfect_order"]) else None,
                     "ma25_above_ma200": bool(latest["ma25_above_ma200"]),
                     "ma75_above_ma200": bool(latest["ma75_above_ma200"]),
                     "ma25_above_ma75": bool(latest["ma25_above_ma75"]),
                     "perfect_order": bool(latest["perfect_order"]),
                     "bearish_stack_recent": bool(latest["bearish_stack_recent"]),
+                    "bearish_perfect_order_recent": bool(latest["bearish_perfect_order_recent"]),
                     "ma25_cross_200_today": bool(latest["ma25_cross_200_today"]),
                     "ma75_cross_200_today": bool(latest["ma75_cross_200_today"]),
                     "ma25_cross_200_recent": bool(latest["ma25_cross_200_recent"]),
@@ -408,7 +448,11 @@ def run():
                     "ma25_cross_200_recent_tight": bool(latest["ma25_cross_200_recent_tight"]),
                     "ma75_cross_200_recent_tight": bool(latest["ma75_cross_200_recent_tight"]),
                     "perfect_order_recent": bool(latest["perfect_order_recent"]),
+                    "perfect_order_today": bool(latest["perfect_order_today"]),
+                    "perfect_order_recent_tight": bool(latest["perfect_order_recent_tight"]),
                     "initial_trend_signal": bool(latest["initial_trend_signal"]),
+                    "early_reversal_setup": bool(latest["early_reversal_setup"]),
+                    "reversal_from_bearish_po": bool(latest["reversal_from_bearish_po"]),
                     "sector": fundamentals["sector"],
                     "industry": fundamentals["industry"],
                 }
@@ -455,12 +499,15 @@ def run():
             "ma75_slope_pct",
             "ma200_slope_pct",
             "close_vs_ma25_pct",
+            "close_vs_ma75_pct",
             "days_since_75gc200",
+            "days_since_perfect_order",
             "ma25_above_ma200",
             "ma75_above_ma200",
             "ma25_above_ma75",
             "perfect_order",
             "bearish_stack_recent",
+            "bearish_perfect_order_recent",
             "ma25_cross_200_today",
             "ma75_cross_200_today",
             "ma25_cross_200_recent",
@@ -470,7 +517,11 @@ def run():
             "ma25_cross_200_recent_tight",
             "ma75_cross_200_recent_tight",
             "perfect_order_recent",
+            "perfect_order_today",
+            "perfect_order_recent_tight",
             "initial_trend_signal",
+            "early_reversal_setup",
+            "reversal_from_bearish_po",
             "sector",
             "industry",
         ]
@@ -478,16 +529,22 @@ def run():
     latest_export_df = format_long_term_latest_output(output_df)
     history_export_df = format_long_term_output(output_df)
     gc_df = df[
-        df["initial_trend_signal"]
-        & df["days_since_75gc200"].notna()
-        & (df["days_since_75gc200"] <= PERFECT_ORDER_LOOKBACK)
+        (
+            df["reversal_from_bearish_po"]
+            | (
+                df["early_reversal_setup"]
+                & df["days_since_75gc200"].notna()
+                & (df["days_since_75gc200"] <= PERFECT_ORDER_LOOKBACK)
+            )
+            | df["initial_trend_signal"]
+        )
         & df["close_vs_ma25_pct"].notna()
         & (df["close_vs_ma25_pct"] >= -1.0)
         & (df["close_vs_ma25_pct"] <= 8.0)
     ].copy()
     gc_df = gc_df.sort_values(
-        ["days_since_75gc200", "score", "trend_score"],
-        ascending=[True, False, False],
+        ["reversal_from_bearish_po", "early_reversal_setup", "days_since_perfect_order", "days_since_75gc200", "score"],
+        ascending=[False, False, True, True, False],
     ).reset_index(drop=True)
     gc_df["rank"] = gc_df.index + 1
     gc_output_df = gc_df[
@@ -498,9 +555,16 @@ def run():
             "rank",
             "ticker",
             "name",
+            "reversal_from_bearish_po",
+            "early_reversal_setup",
             "initial_trend_signal",
+            "days_since_perfect_order",
             "days_since_75gc200",
             "close_vs_ma25_pct",
+            "close_vs_ma75_pct",
+            "bearish_perfect_order_recent",
+            "perfect_order_today",
+            "perfect_order_recent_tight",
             "perfect_order_recent",
             "ma25_cross_75_recent_tight",
             "ma25_cross_200_recent_tight",
