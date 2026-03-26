@@ -574,8 +574,6 @@ def run():
             "initial_trend_signal",
             "early_reversal_setup",
             "reversal_from_bearish_po",
-            "pullback_score",
-            "pullback_candidate",
             "sector",
             "industry",
         ]
