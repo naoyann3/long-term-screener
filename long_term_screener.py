@@ -252,6 +252,8 @@ def calc_indicators(df: pd.DataFrame) -> pd.DataFrame:
     df["change_20d_pct"] = (df["Close"] - df["Close"].shift(20)) / df["Close"].shift(20) * 100
     df["change_60d_pct"] = (df["Close"] - df["Close"].shift(60)) / df["Close"].shift(60) * 100
     df["change_120d_pct"] = (df["Close"] - df["Close"].shift(120)) / df["Close"].shift(120) * 100
+    df["high_60"] = df["High"].rolling(60).max()
+    df["drawdown_from_60d_high_pct"] = (df["Close"] - df["high_60"]) / df["high_60"] * 100
     df["recent_high_252"] = df["High"].rolling(252, min_periods=120).max()
     df["gap_to_52w_high_pct"] = (df["recent_high_252"] - df["Close"]) / df["Close"] * 100
     df["volume_ratio_20"] = df["Volume"] / df["vol_avg20"]
