@@ -214,6 +214,11 @@ def calc_indicators(df: pd.DataFrame) -> pd.DataFrame:
     df["ma200_slope_pct"] = (df["ma200"] - df["ma200"].shift(5)) / df["ma200"].shift(5) * 100
     df["close_vs_ma25_pct"] = (df["Close"] - df["ma25"]) / df["ma25"] * 100
     df["close_vs_ma75_pct"] = (df["Close"] - df["ma75"]) / df["ma75"] * 100
+    df["close_vs_ma200_pct"] = (df["Close"] - df["ma200"]) / df["ma200"] * 100
+    df["touch_ma25_intraday"] = df["Low"] <= df["ma25"]
+    df["touch_ma75_intraday"] = df["Low"] <= df["ma75"]
+    df["reclaim_ma25_close"] = df["touch_ma25_intraday"] & (df["Close"] >= df["ma25"])
+    df["reclaim_ma75_close"] = df["touch_ma75_intraday"] & (df["Close"] >= df["ma75"])
     df["initial_trend_signal"] = (
         (df["Close"] >= df["ma25"])
         & df["perfect_order"]
@@ -250,12 +255,38 @@ def calc_indicators(df: pd.DataFrame) -> pd.DataFrame:
     df["recent_high_252"] = df["High"].rolling(252, min_periods=120).max()
     df["gap_to_52w_high_pct"] = (df["recent_high_252"] - df["Close"]) / df["Close"] * 100
     df["volume_ratio_20"] = df["Volume"] / df["vol_avg20"]
+    df["down_day"] = df["Close"] < df["Open"]
+    df["down_volume_spike"] = df["down_day"] & (df["volume_ratio_20"] >= 1.5)
     cross_positions = pd.Series(range(len(df)), index=df.index).where(df["ma75_cross_200_today"])
     df["days_since_75gc200"] = pd.Series(range(len(df)), index=df.index) - cross_positions.ffill()
     df.loc[cross_positions.ffill().isna(), "days_since_75gc200"] = pd.NA
     po_positions = pd.Series(range(len(df)), index=df.index).where(df["perfect_order_today"])
     df["days_since_perfect_order"] = pd.Series(range(len(df)), index=df.index) - po_positions.ffill()
     df.loc[po_positions.ffill().isna(), "days_since_perfect_order"] = pd.NA
+    pullback_score = pd.Series(0.0, index=df.index)
+    pullback_score += (df["Close"] >= df["ma200"]).fillna(False).astype(float) * 2.0
+    pullback_score += (df["ma200_slope_pct"] > 0).fillna(False).astype(float) * 2.0
+    pullback_score += (df["ma75_slope_pct"] > 0).fillna(False).astype(float) * 1.5
+    pullback_score += df["ma25_above_ma75"].fillna(False).astype(float) * 1.0
+    pullback_score += df["reclaim_ma25_close"].fillna(False).astype(float) * 1.5
+    pullback_score += df["reclaim_ma75_close"].fillna(False).astype(float) * 2.5
+    pullback_score += df["close_vs_ma25_pct"].between(-1.0, 3.0).fillna(False).astype(float) * 1.0
+    pullback_score += df["close_vs_ma75_pct"].between(-1.0, 5.0).fillna(False).astype(float) * 1.0
+    pullback_score -= df["down_volume_spike"].fillna(False).astype(float) * 2.5
+    pullback_score -= (df["Close"] < df["ma75"]).fillna(False).astype(float) * 2.0
+    pullback_score -= (df["change_20d_pct"] < -8).fillna(False).astype(float) * 1.0
+    pullback_score -= (df["drawdown_from_60d_high_pct"] <= -15).fillna(False).astype(float) * 1.0
+    df["pullback_score"] = pullback_score.round(2)
+    df["pullback_candidate"] = (
+        (df["Close"] >= df["ma200"])
+        & (df["ma200_slope_pct"] > 0)
+        & (df["ma75_slope_pct"] > 0)
+        & df["ma25_above_ma75"]
+        & (df["reclaim_ma25_close"] | df["reclaim_ma75_close"])
+        & (~df["down_volume_spike"])
+        & (df["drawdown_from_60d_high_pct"] > -15)
+        & (df["pullback_score"] >= 6.0)
+    )
     return df
 
 
@@ -361,6 +392,9 @@ def score_row(latest: pd.Series, fundamentals: dict) -> tuple[float, float, floa
         strength_score += 2.5
     if latest["reversal_from_bearish_po"]:
         strength_score += 4.0
+    if latest["pullback_candidate"]:
+        strength_score += 2.0
+    strength_score += min(max(latest["pullback_score"], 0.0), 10.0) * 0.15
 
     total = trend_score + quality_score + strength_score + risk_penalty
     return round(total, 2), round(trend_score, 2), round(quality_score, 2), round(strength_score + risk_penalty, 2)
@@ -431,8 +465,16 @@ def run():
                     "ma200_slope_pct": round(float(latest["ma200_slope_pct"]), 3) if pd.notna(latest["ma200_slope_pct"]) else None,
                     "close_vs_ma25_pct": round(float(latest["close_vs_ma25_pct"]), 3) if pd.notna(latest["close_vs_ma25_pct"]) else None,
                     "close_vs_ma75_pct": round(float(latest["close_vs_ma75_pct"]), 3) if pd.notna(latest["close_vs_ma75_pct"]) else None,
+                    "close_vs_ma200_pct": round(float(latest["close_vs_ma200_pct"]), 3) if pd.notna(latest["close_vs_ma200_pct"]) else None,
                     "days_since_75gc200": int(latest["days_since_75gc200"]) if pd.notna(latest["days_since_75gc200"]) else None,
                     "days_since_perfect_order": int(latest["days_since_perfect_order"]) if pd.notna(latest["days_since_perfect_order"]) else None,
+                    "touch_ma25_intraday": bool(latest["touch_ma25_intraday"]),
+                    "touch_ma75_intraday": bool(latest["touch_ma75_intraday"]),
+                    "reclaim_ma25_close": bool(latest["reclaim_ma25_close"]),
+                    "reclaim_ma75_close": bool(latest["reclaim_ma75_close"]),
+                    "down_volume_spike": bool(latest["down_volume_spike"]),
+                    "pullback_score": round(float(latest["pullback_score"]), 3) if pd.notna(latest["pullback_score"]) else None,
+                    "pullback_candidate": bool(latest["pullback_candidate"]),
                     "ma25_above_ma200": bool(latest["ma25_above_ma200"]),
                     "ma75_above_ma200": bool(latest["ma75_above_ma200"]),
                     "ma25_above_ma75": bool(latest["ma25_above_ma75"]),
@@ -500,8 +542,16 @@ def run():
             "ma200_slope_pct",
             "close_vs_ma25_pct",
             "close_vs_ma75_pct",
+            "close_vs_ma200_pct",
             "days_since_75gc200",
             "days_since_perfect_order",
+            "touch_ma25_intraday",
+            "touch_ma75_intraday",
+            "reclaim_ma25_close",
+            "reclaim_ma75_close",
+            "down_volume_spike",
+            "pullback_score",
+            "pullback_candidate",
             "ma25_above_ma200",
             "ma75_above_ma200",
             "ma25_above_ma75",
@@ -522,6 +572,8 @@ def run():
             "initial_trend_signal",
             "early_reversal_setup",
             "reversal_from_bearish_po",
+            "pullback_score",
+            "pullback_candidate",
             "sector",
             "industry",
         ]
