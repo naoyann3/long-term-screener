@@ -39,7 +39,7 @@ def ensure_template() -> None:
         return
 
     template = pd.DataFrame(
-        columns=["ticker", "name", "entry_date", "entry_price", "note"]
+        columns=["ticker", "name", "entry_date", "entry_price", "position_type", "note"]
     )
     template.to_csv(path, index=False, encoding="utf-8-sig")
 
@@ -61,9 +61,28 @@ def load_tracked_tickers() -> pd.DataFrame:
         df["entry_date"] = ""
     if "entry_price" not in df.columns:
         df["entry_price"] = ""
+    if "position_type" not in df.columns:
+        df["position_type"] = ""
     if "note" not in df.columns:
         df["note"] = ""
+    df["position_type"] = df.apply(
+        lambda row: normalize_position_type(row.get("position_type", ""), row.get("note", "")),
+        axis=1,
+    )
     return df.reset_index(drop=True)
+
+
+def normalize_position_type(value: str, note: str) -> str:
+    raw = str(value).strip().lower()
+    if raw in {"scout", "core", "review"}:
+        return raw
+
+    note_text = str(note)
+    if "検証" in note_text or "過去売却" in note_text:
+        return "review"
+    if "既存保有" in note_text:
+        return "core"
+    return "scout"
 
 
 def fetch_history(ticker: str) -> pd.DataFrame | None:
@@ -174,6 +193,30 @@ def judge_status(latest: pd.Series) -> tuple[str, int, list[str]]:
     return status, score, flags
 
 
+def suggested_action(position_type: str, status: str) -> str:
+    actions = {
+        "scout": {
+            "継続": "少量で継続観察",
+            "継続(注意)": "まだ様子見",
+            "警戒": "撤退検討",
+            "撤退": "撤退寄り",
+        },
+        "core": {
+            "継続": "保有継続",
+            "継続(注意)": "買い増し停止",
+            "警戒": "縮小・防衛ライン確認",
+            "撤退": "売却候補",
+        },
+        "review": {
+            "継続": "検証継続",
+            "継続(注意)": "検証継続",
+            "警戒": "要検証",
+            "撤退": "要検証",
+        },
+    }
+    return actions.get(position_type, actions["scout"]).get(status, "様子見")
+
+
 def run() -> None:
     ensure_dirs()
     tracked = load_tracked_tickers()
@@ -210,6 +253,7 @@ def run() -> None:
                 "name": name,
                 "entry_date": row["entry_date"],
                 "entry_price": entry_price,
+                "position_type": row["position_type"],
                 "close": round(float(latest["Close"]), 3),
                 "close_vs_entry_pct": round(pct(float(latest["Close"]), entry_price), 3) if entry_price else None,
                 "close_vs_ma25_pct": round(pct(float(latest["Close"]), float(latest["ma25"])), 3) if pd.notna(latest["ma25"]) else None,
@@ -224,6 +268,7 @@ def run() -> None:
                 "upper_shadow_pct": round(upper_shadow_pct(latest), 3),
                 "status": status,
                 "status_score": status_score,
+                "suggested_action": suggested_action(row["position_type"], status),
                 "warning_flags": " / ".join(flags),
                 "note": row["note"],
             }
