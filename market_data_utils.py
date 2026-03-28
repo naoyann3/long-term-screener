@@ -135,8 +135,14 @@ def detect_price_data_issue(latest: pd.Series, hist: pd.DataFrame) -> str:
         if factor_min > 0:
             factor_jump = factor_max / factor_min - 1.0
 
+    close_vs_ma25_pct = latest.get("close_vs_ma25_pct")
+    if close_vs_ma25_pct is None and latest.get("ma25") not in (None, 0) and pd.notna(latest.get("ma25")):
+        close_vs_ma25_pct = (float(latest["Close"]) - float(latest["ma25"])) / float(latest["ma25"]) * 100
+
     extreme_drop = (
-        float(latest["close_vs_ma25_pct"]) <= -40
+        close_vs_ma25_pct is not None
+        and pd.notna(close_vs_ma25_pct)
+        and float(close_vs_ma25_pct) <= -40
         and float(latest["change_20d_pct"]) <= -40
         and float(latest["drawdown_from_60d_high_pct"]) <= -40
     )
