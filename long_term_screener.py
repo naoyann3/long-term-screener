@@ -35,6 +35,8 @@ RECENT_CROSS_LOOKBACK = 10
 PERFECT_ORDER_LOOKBACK = 5
 BEARISH_ORDER_LOOKBACK = 60
 REVERSAL_LOOKBACK = 10
+GC_MIN_MA25_SLOPE_PCT = 0.25
+GC_MIN_MA75_SLOPE_PCT = 0.25
 
 
 def _ticker_path() -> Path:
@@ -625,6 +627,9 @@ def run():
         & df["close_vs_ma25_pct"].notna()
         & (df["close_vs_ma25_pct"] >= -1.0)
         & (df["close_vs_ma25_pct"] <= 8.0)
+        & (~df["down_volume_spike"])
+        & (df["ma25_slope_pct"] >= GC_MIN_MA25_SLOPE_PCT)
+        & (df["ma75_slope_pct"] >= GC_MIN_MA75_SLOPE_PCT)
     ].copy()
     gc_df = gc_df.sort_values(
         ["reversal_from_bearish_po", "early_reversal_setup", "days_since_perfect_order", "days_since_75gc200", "score"],
