@@ -256,9 +256,23 @@ def calc_indicators(df: pd.DataFrame) -> pd.DataFrame:
     df["drawdown_from_60d_high_pct"] = (df["Close"] - df["high_60"]) / df["high_60"] * 100
     df["recent_high_252"] = df["High"].rolling(252, min_periods=120).max()
     df["gap_to_52w_high_pct"] = (df["recent_high_252"] - df["Close"]) / df["Close"] * 100
+    df["vol_avg10"] = df["Volume"].rolling(10).mean()
     df["volume_ratio_20"] = df["Volume"] / df["vol_avg20"]
+    df["volume_ratio_10"] = df["Volume"] / df["vol_avg10"]
+    df["volume_ratio_20_mean_5"] = df["volume_ratio_20"].rolling(5).mean()
+    df["volume_ratio_20_mean_10"] = df["volume_ratio_20"].rolling(10).mean()
     df["down_day"] = df["Close"] < df["Open"]
     df["down_volume_spike"] = df["down_day"] & (df["volume_ratio_20"] >= 1.5)
+    price_range = (df["High"] - df["Low"]).replace(0, pd.NA)
+    upper_shadow = (df["High"] - df[["Open", "Close"]].max(axis=1)).clip(lower=0)
+    lower_shadow = (df[["Open", "Close"]].min(axis=1) - df["Low"]).clip(lower=0)
+    df["upper_shadow_pct"] = (upper_shadow / price_range) * 100
+    df["lower_shadow_pct"] = (lower_shadow / price_range) * 100
+    df["distribution_warning"] = (
+        (df["upper_shadow_pct"] >= 45)
+        & (df["volume_ratio_20"] >= 1.5)
+        & (df["gap_to_52w_high_pct"] <= 8)
+    )
     cross_positions = pd.Series(range(len(df)), index=df.index).where(df["ma75_cross_200_today"])
     df["days_since_75gc200"] = pd.Series(range(len(df)), index=df.index) - cross_positions.ffill()
     df.loc[cross_positions.ffill().isna(), "days_since_75gc200"] = pd.NA
@@ -288,6 +302,31 @@ def calc_indicators(df: pd.DataFrame) -> pd.DataFrame:
         & (~df["down_volume_spike"])
         & (df["drawdown_from_60d_high_pct"] > -15)
         & (df["pullback_score"] >= 6.0)
+    )
+    stealth_score = pd.Series(0.0, index=df.index)
+    stealth_score += (df["volume_ratio_20_mean_5"] >= 1.15).fillna(False).astype(float) * 1.5
+    stealth_score += (df["volume_ratio_20_mean_10"] >= 1.05).fillna(False).astype(float) * 1.0
+    stealth_score += (df["Close"] >= df["ma75"]).fillna(False).astype(float) * 1.0
+    stealth_score += (df["Close"] >= df["ma200"]).fillna(False).astype(float) * 0.5
+    stealth_score += (df["ma200_slope_pct"] > 0).fillna(False).astype(float) * 1.0
+    stealth_score += (df["ma75_slope_pct"] > 0).fillna(False).astype(float) * 1.0
+    stealth_score += df["drawdown_from_60d_high_pct"].between(-12, 2).fillna(False).astype(float) * 1.0
+    stealth_score += (df["lower_shadow_pct"] >= 35).fillna(False).astype(float) * 1.0
+    stealth_score += df["reclaim_ma25_close"].fillna(False).astype(float) * 1.0
+    stealth_score += df["reclaim_ma75_close"].fillna(False).astype(float) * 1.0
+    stealth_score -= df["down_volume_spike"].fillna(False).astype(float) * 1.5
+    stealth_score -= df["distribution_warning"].fillna(False).astype(float) * 1.5
+    stealth_score -= (df["Close"] < df["ma75"]).fillna(False).astype(float) * 1.0
+    stealth_score -= (df["change_20d_pct"] > 20).fillna(False).astype(float) * 0.5
+    df["stealth_accumulation_score"] = stealth_score.round(2)
+    df["stealth_accumulation_candidate"] = (
+        (df["volume_ratio_20_mean_5"] >= 1.10)
+        & (df["Close"] >= df["ma75"])
+        & (df["ma200_slope_pct"] > 0)
+        & (~df["down_volume_spike"])
+        & (~df["distribution_warning"])
+        & (df["drawdown_from_60d_high_pct"] > -15)
+        & (df["stealth_accumulation_score"] >= 5.5)
     )
     return df
 
