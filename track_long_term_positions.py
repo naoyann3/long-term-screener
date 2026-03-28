@@ -6,6 +6,7 @@ from pathlib import Path
 import pandas as pd
 import yfinance as yf
 
+from market_data_utils import adjusted_entry_price, prepare_price_history, select_latest_completed_row
 from output_format import format_long_term_tracking_output
 
 TRACKED_TICKERS_CSV = "tracked_tickers.csv"
@@ -87,7 +88,7 @@ def normalize_position_type(value: str, note: str) -> str:
 
 def fetch_history(ticker: str) -> pd.DataFrame | None:
     try:
-        hist = yf.Ticker(ticker).history(period="18mo", interval="1d", auto_adjust=True)
+        hist = yf.Ticker(ticker).history(period="18mo", interval="1d", auto_adjust=False, actions=True)
     except Exception as exc:
         print(f"fetch_history error: {ticker} {exc}")
         return None
@@ -95,14 +96,7 @@ def fetch_history(ticker: str) -> pd.DataFrame | None:
     if hist is None or hist.empty or len(hist) < 200:
         return None
 
-    if isinstance(hist.columns, pd.MultiIndex):
-        hist.columns = hist.columns.get_level_values(0)
-
-    need_cols = ["Open", "High", "Low", "Close", "Volume"]
-    if any(col not in hist.columns for col in need_cols):
-        return None
-
-    return hist[need_cols].dropna().copy()
+    return prepare_price_history(hist)
 
 
 def add_indicators(df: pd.DataFrame) -> pd.DataFrame:
@@ -235,8 +229,7 @@ def run() -> None:
         if hist is None:
             continue
         hist = add_indicators(hist)
-        latest = hist.iloc[-2]
-        latest_date = pd.Timestamp(hist.index[-2]).date()
+        latest, latest_date = select_latest_completed_row(hist)
         run_date = latest_date if run_date is None else max(run_date, latest_date)
 
         status, status_score, flags = judge_status(latest)
@@ -245,6 +238,7 @@ def run() -> None:
             entry_price = float(row["entry_price"]) if str(row["entry_price"]).strip() else None
         except Exception:
             entry_price = None
+        adjusted_entry = adjusted_entry_price(entry_price, str(row["entry_date"]).strip(), hist)
 
         rows.append(
             {
@@ -253,9 +247,10 @@ def run() -> None:
                 "name": name,
                 "entry_date": row["entry_date"],
                 "entry_price": entry_price,
+                "adjusted_entry_price": round(float(adjusted_entry), 3) if adjusted_entry else None,
                 "position_type": row["position_type"],
-                "close": round(float(latest["Close"]), 3),
-                "close_vs_entry_pct": round(pct(float(latest["Close"]), entry_price), 3) if entry_price else None,
+                "close": round(float(latest["raw_close"]), 3),
+                "close_vs_entry_pct": round(pct(float(latest["raw_close"]), adjusted_entry), 3) if adjusted_entry else None,
                 "close_vs_ma25_pct": round(pct(float(latest["Close"]), float(latest["ma25"])), 3) if pd.notna(latest["ma25"]) else None,
                 "close_vs_ma75_pct": round(pct(float(latest["Close"]), float(latest["ma75"])), 3) if pd.notna(latest["ma75"]) else None,
                 "close_vs_ma200_pct": round(pct(float(latest["Close"]), float(latest["ma200"])), 3) if pd.notna(latest["ma200"]) else None,

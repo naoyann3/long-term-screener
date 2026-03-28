@@ -9,6 +9,7 @@ import pandas as pd
 import yfinance as yf
 
 from config import LONG_TERM_SCREEN_VERSION, LONG_TERM_WATCHLISTS_DIR, ensure_results_dirs
+from market_data_utils import prepare_price_history, select_latest_completed_row
 from output_format import format_long_term_gc_output, format_long_term_latest_output, format_long_term_output
 
 TICKERS_CSV = "tickers.csv"
@@ -115,7 +116,8 @@ def fetch_price_history(ticker_obj, ticker: str) -> pd.DataFrame | None:
         df = ticker_obj.history(
             period="18mo",
             interval="1d",
-            auto_adjust=True,
+            auto_adjust=False,
+            actions=True,
         )
     except Exception as exc:
         print(f"fetch_price_history error: {ticker} {exc}")
@@ -124,15 +126,7 @@ def fetch_price_history(ticker_obj, ticker: str) -> pd.DataFrame | None:
     if df is None or df.empty or len(df) < 120:
         return None
 
-    if isinstance(df.columns, pd.MultiIndex):
-        df.columns = df.columns.get_level_values(0)
-
-    need_cols = ["Open", "High", "Low", "Close", "Volume"]
-    if any(col not in df.columns for col in need_cols):
-        return None
-
-    df = df[need_cols].dropna().copy()
-    return df
+    return prepare_price_history(df)
 
 
 def fetch_fundamentals(ticker_obj, ticker: str) -> dict | None:
@@ -247,7 +241,7 @@ def calc_indicators(df: pd.DataFrame) -> pd.DataFrame:
         & (df["close_vs_ma25_pct"].between(-3.0, 8.0))
     )
     df["vol_avg20"] = df["Volume"].rolling(20).mean()
-    df["turnover"] = df["Close"] * df["Volume"]
+    df["turnover"] = df["raw_close"] * df["Volume"]
     df["turnover_million"] = df["turnover"] / 1_000_000
     df["change_20d_pct"] = (df["Close"] - df["Close"].shift(20)) / df["Close"].shift(20) * 100
     df["change_60d_pct"] = (df["Close"] - df["Close"].shift(60)) / df["Close"].shift(60) * 100
@@ -467,8 +461,7 @@ def run():
                 continue
 
             hist = calc_indicators(hist)
-            latest = hist.iloc[-2]
-            latest_date = pd.Timestamp(hist.index[-2]).date()
+            latest, latest_date = select_latest_completed_row(hist)
 
             if not passes_long_term_filter(latest, fundamentals):
                 time.sleep(SLEEP_SEC)
@@ -488,7 +481,7 @@ def run():
                     "trend_score": trend_score,
                     "quality_score": quality_score,
                     "strength_score": strength_score,
-                    "close": round(float(latest["Close"]), 3),
+                    "close": round(float(latest["raw_close"]), 3),
                     "turnover_million": round(float(latest["turnover_million"]), 3),
                     "market_cap_billion": round((fundamentals["market_cap"] or 0.0) / 1_000_000_000, 3),
                     "revenue_growth_pct": round(fundamentals["revenue_growth_pct"], 3),
