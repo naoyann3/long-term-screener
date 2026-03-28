@@ -6,7 +6,7 @@ from pathlib import Path
 import pandas as pd
 import yfinance as yf
 
-from market_data_utils import adjusted_entry_price, prepare_price_history, select_latest_completed_row
+from market_data_utils import adjusted_entry_price, detect_price_data_issue, prepare_price_history, select_latest_completed_row
 from output_format import format_long_term_tracking_output
 
 TRACKED_TICKERS_CSV = "tracked_tickers.csv"
@@ -233,12 +233,15 @@ def run() -> None:
         run_date = latest_date if run_date is None else max(run_date, latest_date)
 
         status, status_score, flags = judge_status(latest)
+        data_issue = detect_price_data_issue(latest, hist)
+        if data_issue:
+            flags.append(data_issue)
 
         try:
             entry_price = float(row["entry_price"]) if str(row["entry_price"]).strip() else None
         except Exception:
             entry_price = None
-        adjusted_entry = adjusted_entry_price(entry_price, str(row["entry_date"]).strip(), hist)
+        adjusted_entry = adjusted_entry_price(entry_price, str(row["entry_date"]).strip(), hist, latest)
 
         rows.append(
             {
@@ -264,6 +267,7 @@ def run() -> None:
                 "status": status,
                 "status_score": status_score,
                 "suggested_action": suggested_action(row["position_type"], status),
+                "data_issue": data_issue,
                 "warning_flags": " / ".join(flags),
                 "note": row["note"],
             }

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, time
+from datetime import date, datetime, time
 from zoneinfo import ZoneInfo
 
 import pandas as pd
@@ -63,20 +63,47 @@ def select_latest_completed_row(df: pd.DataFrame, now: datetime | None = None) -
     return df.iloc[latest_pos], latest_date
 
 
-def adjusted_entry_price(entry_price: float | None, entry_date: str, hist: pd.DataFrame) -> float | None:
+def _normalized_index(index: pd.Index) -> pd.DatetimeIndex:
+    normalized_index = pd.DatetimeIndex(index)
+    if normalized_index.tz is not None:
+        normalized_index = normalized_index.tz_localize(None)
+    return normalized_index.normalize()
+
+
+def _row_on_or_before(hist: pd.DataFrame, target_date: date) -> pd.Series | None:
+    normalized_index = _normalized_index(hist.index)
+    mask = normalized_index <= pd.Timestamp(target_date)
+    if not mask.any():
+        return None
+    last_pos = mask.nonzero()[0][-1]
+    return hist.iloc[last_pos]
+
+
+def adjusted_entry_price(
+    entry_price: float | None,
+    entry_date: str,
+    hist: pd.DataFrame,
+    latest_row: pd.Series | None = None,
+) -> float | None:
     if entry_price in (None, 0) or not entry_date:
         return entry_price
 
     try:
-        entry_ts = pd.Timestamp(entry_date).normalize()
+        entry_day = pd.Timestamp(entry_date).date()
     except Exception:
         return entry_price
 
-    normalized_index = pd.DatetimeIndex(hist.index)
-    if normalized_index.tz is not None:
-        normalized_index = normalized_index.tz_localize(None)
-    normalized_index = normalized_index.normalize()
-    splits = hist.loc[normalized_index > entry_ts, "Stock Splits"]
+    entry_row = _row_on_or_before(hist, entry_day)
+    if entry_row is None:
+        return entry_price
+
+    current_row = latest_row if latest_row is not None else hist.iloc[-1]
+
+    entry_factor = float(entry_row.get("adjustment_factor", 1.0) or 1.0)
+    current_factor = float(current_row.get("adjustment_factor", 1.0) or 1.0)
+
+    normalized_index = _normalized_index(hist.index)
+    splits = hist.loc[normalized_index > pd.Timestamp(entry_day), "Stock Splits"]
     split_factor = 1.0
     for ratio in splits:
         try:
@@ -86,6 +113,35 @@ def adjusted_entry_price(entry_price: float | None, entry_date: str, hist: pd.Da
         if ratio_float > 0:
             split_factor *= ratio_float
 
-    if split_factor == 0:
+    if split_factor > 0 and abs(split_factor - 1.0) >= 0.01:
+        return entry_price / split_factor
+
+    if current_factor == 0:
         return entry_price
-    return entry_price / split_factor
+
+    implied_factor = entry_factor / current_factor
+    if implied_factor > 0 and abs(implied_factor - 1.0) >= 0.05:
+        return entry_price * implied_factor
+
+    return entry_price
+
+
+def detect_price_data_issue(latest: pd.Series, hist: pd.DataFrame) -> str:
+    adjustment_range = hist["adjustment_factor"].tail(90)
+    factor_jump = 0.0
+    if not adjustment_range.empty:
+        factor_min = float(adjustment_range.min())
+        factor_max = float(adjustment_range.max())
+        if factor_min > 0:
+            factor_jump = factor_max / factor_min - 1.0
+
+    extreme_drop = (
+        float(latest["close_vs_ma25_pct"]) <= -40
+        and float(latest["change_20d_pct"]) <= -40
+        and float(latest["drawdown_from_60d_high_pct"]) <= -40
+    )
+    if factor_jump >= 0.2:
+        return "価格補正係数が大きく変化"
+    if extreme_drop:
+        return "価格データ要確認"
+    return ""

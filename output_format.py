@@ -232,6 +232,7 @@ TRACKING_COLUMN_LABELS = {
     "status": "判定",
     "status_score": "警戒スコア",
     "suggested_action": "推奨アクション",
+    "data_issue": "データ注意",
     "warning_flags": "警戒サイン",
     "note": "メモ",
 }
@@ -258,6 +259,7 @@ TRACKING_COLUMN_ORDER = [
     "出来高倍率(20日)",
     "上ヒゲ率(%)",
     "推奨アクション",
+    "データ注意",
     "警戒サイン",
     "メモ",
     "生成日時",
