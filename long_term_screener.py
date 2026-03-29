@@ -275,6 +275,31 @@ def calc_indicators(df: pd.DataFrame) -> pd.DataFrame:
     po_positions = pd.Series(range(len(df)), index=df.index).where(df["perfect_order_today"])
     df["days_since_perfect_order"] = pd.Series(range(len(df)), index=df.index) - po_positions.ffill()
     df.loc[po_positions.ffill().isna(), "days_since_perfect_order"] = pd.NA
+    pullback_trend_ok = (
+        (df["Close"] >= df["ma200"])
+        & (df["ma200_slope_pct"] > 0)
+        & (df["ma75_slope_pct"] > 0)
+        & df["ma25_above_ma75"]
+    )
+    df["failed_ma25_reclaim"] = df["touch_ma25_intraday"] & (~df["reclaim_ma25_close"])
+    df["failed_ma75_reclaim"] = df["touch_ma75_intraday"] & (~df["reclaim_ma75_close"])
+    df["support_reaction_ok"] = (
+        (df["reclaim_ma25_close"] | df["reclaim_ma75_close"])
+        & (~df["down_volume_spike"])
+        & (df["drawdown_from_60d_high_pct"] > -15)
+    )
+    df["ma25_pullback_candidate"] = (
+        pullback_trend_ok
+        & df["touch_ma25_intraday"]
+        & df["reclaim_ma25_close"]
+        & (df["drawdown_from_60d_high_pct"] > -10)
+    )
+    df["ma75_pullback_candidate"] = (
+        pullback_trend_ok
+        & df["touch_ma75_intraday"]
+        & df["reclaim_ma75_close"]
+        & (df["drawdown_from_60d_high_pct"] > -15)
+    )
     pullback_score = pd.Series(0.0, index=df.index)
     pullback_score += (df["Close"] >= df["ma200"]).fillna(False).astype(float) * 2.0
     pullback_score += (df["ma200_slope_pct"] > 0).fillna(False).astype(float) * 2.0
@@ -282,21 +307,22 @@ def calc_indicators(df: pd.DataFrame) -> pd.DataFrame:
     pullback_score += df["ma25_above_ma75"].fillna(False).astype(float) * 1.0
     pullback_score += df["reclaim_ma25_close"].fillna(False).astype(float) * 1.5
     pullback_score += df["reclaim_ma75_close"].fillna(False).astype(float) * 2.5
+    pullback_score += df["support_reaction_ok"].fillna(False).astype(float) * 1.0
+    pullback_score += df["ma25_pullback_candidate"].fillna(False).astype(float) * 0.5
+    pullback_score += df["ma75_pullback_candidate"].fillna(False).astype(float) * 1.0
     pullback_score += df["close_vs_ma25_pct"].between(-1.0, 3.0).fillna(False).astype(float) * 1.0
     pullback_score += df["close_vs_ma75_pct"].between(-1.0, 5.0).fillna(False).astype(float) * 1.0
     pullback_score -= df["down_volume_spike"].fillna(False).astype(float) * 2.5
+    pullback_score -= df["failed_ma25_reclaim"].fillna(False).astype(float) * 1.5
+    pullback_score -= df["failed_ma75_reclaim"].fillna(False).astype(float) * 2.0
     pullback_score -= (df["Close"] < df["ma75"]).fillna(False).astype(float) * 2.0
     pullback_score -= (df["change_20d_pct"] < -8).fillna(False).astype(float) * 1.0
     pullback_score -= (df["drawdown_from_60d_high_pct"] <= -15).fillna(False).astype(float) * 1.0
     df["pullback_score"] = pullback_score.round(2)
     df["pullback_candidate"] = (
-        (df["Close"] >= df["ma200"])
-        & (df["ma200_slope_pct"] > 0)
-        & (df["ma75_slope_pct"] > 0)
-        & df["ma25_above_ma75"]
-        & (df["reclaim_ma25_close"] | df["reclaim_ma75_close"])
-        & (~df["down_volume_spike"])
-        & (df["drawdown_from_60d_high_pct"] > -15)
+        pullback_trend_ok
+        & df["support_reaction_ok"]
+        & (df["ma25_pullback_candidate"] | df["ma75_pullback_candidate"])
         & (df["pullback_score"] >= 6.0)
     )
     stealth_score = pd.Series(0.0, index=df.index)
@@ -508,6 +534,11 @@ def run():
                     "touch_ma75_intraday": bool(latest["touch_ma75_intraday"]),
                     "reclaim_ma25_close": bool(latest["reclaim_ma25_close"]),
                     "reclaim_ma75_close": bool(latest["reclaim_ma75_close"]),
+                    "failed_ma25_reclaim": bool(latest["failed_ma25_reclaim"]),
+                    "failed_ma75_reclaim": bool(latest["failed_ma75_reclaim"]),
+                    "support_reaction_ok": bool(latest["support_reaction_ok"]),
+                    "ma25_pullback_candidate": bool(latest["ma25_pullback_candidate"]),
+                    "ma75_pullback_candidate": bool(latest["ma75_pullback_candidate"]),
                     "down_volume_spike": bool(latest["down_volume_spike"]),
                     "pullback_score": round(float(latest["pullback_score"]), 3) if pd.notna(latest["pullback_score"]) else None,
                     "pullback_candidate": bool(latest["pullback_candidate"]),
@@ -585,6 +616,11 @@ def run():
             "touch_ma75_intraday",
             "reclaim_ma25_close",
             "reclaim_ma75_close",
+            "failed_ma25_reclaim",
+            "failed_ma75_reclaim",
+            "support_reaction_ok",
+            "ma25_pullback_candidate",
+            "ma75_pullback_candidate",
             "down_volume_spike",
             "pullback_score",
             "pullback_candidate",
