@@ -123,6 +123,12 @@ def adjusted_entry_price(
     if implied_factor > 0 and abs(implied_factor - 1.0) >= 0.05:
         return entry_price * implied_factor
 
+    entry_close_basis = entry_row.get("raw_close", entry_row.get("Close"))
+    if pd.notna(entry_close_basis) and float(entry_close_basis) > 0:
+        basis_ratio = entry_price / float(entry_close_basis)
+        if basis_ratio >= 1.8 or basis_ratio <= 0.55:
+            return float(entry_close_basis)
+
     return entry_price
 
 
