@@ -300,6 +300,18 @@ def calc_indicators(df: pd.DataFrame) -> pd.DataFrame:
         & df["reclaim_ma75_close"]
         & (df["drawdown_from_60d_high_pct"] > -15)
     )
+    df["trend_filter_ok"] = (df["ma200_slope_pct"] > 0)
+    df["volume_filter_ok"] = (df["volume_ratio_20"] >= 1.0)
+    df["support_trace_ok"] = df["support_reaction_ok"] | (df["lower_shadow_pct"] >= 1.0)
+    df["drawdown_filter_ok"] = df["drawdown_from_60d_high_pct"].between(-20.0, -2.0, inclusive="both")
+    df["ma75_quality_filter"] = (
+        df["trend_filter_ok"]
+        & df["volume_filter_ok"]
+        & df["support_trace_ok"]
+        & df["drawdown_filter_ok"]
+    )
+    df["ma75_touch_quality_signal"] = df["touch_ma75_intraday"] & df["ma75_quality_filter"]
+    df["ma75_nextday_quality_signal"] = df["ma75_touch_quality_signal"].shift(1).fillna(False)
     pullback_score = pd.Series(0.0, index=df.index)
     pullback_score += (df["Close"] >= df["ma200"]).fillna(False).astype(float) * 2.0
     pullback_score += (df["ma200_slope_pct"] > 0).fillna(False).astype(float) * 2.0
