@@ -54,6 +54,11 @@ jobs:
         run: |
           python track_long_term_positions.py
 
+      # 👇 【フェーズ2：新規追加】：台帳に載っている過去の合格銘柄の「その後の成績」を自動追跡
+      - name: Track candidates performance
+        run: |
+          python track_candidates_performance.py
+
       # 【最重要：フェーズ1追加】更新された全データベースを確実にGit自動コミット＆プッシュ（永続化）
       - name: Commit and push changes
         run: |
