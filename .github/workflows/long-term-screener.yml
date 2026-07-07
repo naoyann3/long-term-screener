@@ -75,7 +75,7 @@ jobs:
           git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
           
           # 1. ルート直下の更新ファイルをステージ
-          for file in long_term_watchlist.csv long_term_gc_watchlist.csv long_term_tracking.csv tracked_tickers.csv universe_offset.txt; do
+          for file in long_term_watchlist.csv long_term_gc_watchlist.csv long_term_tracking.csv tracked_tickers.csv universe_offset.txt tickers.csv; do
             if [ -f "$file" ]; then
               git add "$file"
             fi
