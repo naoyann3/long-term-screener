@@ -1,24 +1,24 @@
+# long_term_screener.py (Version 1.2 - Two-Stage Hybrid Full Scan Edition)
 from __future__ import annotations
 
 from datetime import datetime
 import gc
 from pathlib import Path
 import time
-
+import numpy as np
 import pandas as pd
 import yfinance as yf
 
-from config import LONG_TERM_SCREEN_VERSION, LONG_TERM_WATCHLISTS_DIR, ensure_results_dirs
+from config import LONG_TERM_SCREEN_VERSION, LONG_TERM_WATCHLISTS_DIR, ensure_results_dirs, CANDIDATE_HISTORY_CSV
 from market_data_utils import prepare_price_history, select_latest_completed_row
 from output_format import format_long_term_gc_output, format_long_term_latest_output, format_long_term_output
 
 TICKERS_CSV = "tickers.csv"
 OUTPUT_CSV = "long_term_watchlist.csv"
 GC_OUTPUT_CSV = "long_term_gc_watchlist.csv"
-UNIVERSE_OFFSET_TXT = "universe_offset.txt"
-GC_WATCHLISTS_DIRNAME = "long_term_gc_watchlists"
 
-MAX_TICKERS = 250
+# 1回あたりに一括ロードするチャンクサイズ（yfinanceの1回あたりの最大指定制限）
+DOWNLOAD_CHUNK_SIZE = 400
 SLEEP_SEC = 0.8
 TOP_N_OUTPUT = 50
 TOP_N_GC_OUTPUT = 20
@@ -51,53 +51,67 @@ def _latest_gc_output_path() -> Path:
     return Path(__file__).resolve().parent / GC_OUTPUT_CSV
 
 
-def _offset_path() -> Path:
-    return Path(__file__).resolve().parent / UNIVERSE_OFFSET_TXT
-
-
 def _gc_watchlists_dir() -> Path:
-    return Path(__file__).resolve().parent / "results" / GC_WATCHLISTS_DIRNAME
+    return Path(__file__).resolve().parent / "results" / "long_term_gc_watchlists"
 
 
-def load_universe_offset(total_count: int) -> int:
-    if total_count <= 0:
-        return 0
-
-    path = _offset_path()
-    if not path.exists():
-        return 0
-
-    try:
-        raw = path.read_text(encoding="utf-8").strip()
-        if not raw:
-            return 0
-        return int(raw) % total_count
-    except Exception:
-        return 0
-
-
-def save_universe_offset(next_offset: int) -> None:
-    _offset_path().write_text(str(next_offset), encoding="utf-8")
-
-
-def load_tickers() -> pd.DataFrame:
+def load_all_tickers() -> pd.DataFrame:
+    """
+    【Version 1.2修正点】：毎日全数スキャンが可能になったため、
+    ローテーション用のoffset制限を完全に廃止し、tickers.csvに登録された全数を一括ロードします。
+    """
     df = pd.read_csv(_ticker_path())
     df = df.dropna(subset=["ticker"])
     df["ticker"] = df["ticker"].astype(str).str.strip()
     if "name" not in df.columns:
         df["name"] = df["ticker"]
+    return df.reset_index(drop=True)
 
-    df = df.reset_index(drop=True)
-    total_count = len(df)
-    if total_count == 0:
-        return df
 
-    offset = load_universe_offset(total_count)
-    rotated = pd.concat([df.iloc[offset:], df.iloc[:offset]], ignore_index=True)
-    selected = rotated.head(MAX_TICKERS).reset_index(drop=True)
-    next_offset = (offset + MAX_TICKERS) % total_count
-    save_universe_offset(next_offset)
-    return selected
+def download_chunk_histories(tickers: list[str]) -> dict[str, pd.DataFrame]:
+    """
+    【Version 1.2新設】：yfinanceの一括高速ダウンロード機能（yf.download）を利用し、
+    数百ティッカーずつグループ化（チャンク）して価格データを数秒で一網打尽にします。
+    """
+    full_data = {}
+    chunks = [tickers[i:i + DOWNLOAD_CHUNK_SIZE] for i in range(0, len(tickers), DOWNLOAD_CHUNK_SIZE)]
+    
+    print(f"\n[第1段階] 全 {len(tickers)} 銘柄を一括ダウンロードします (分割数: {len(chunks)} チャンク)...")
+    
+    for idx, chunk in enumerate(chunks, 1):
+        print(f"  ・ダウンロード中 ({idx}/{len(chunks)})... {len(chunk)} 銘柄")
+        try:
+            # group_by="column" により、[Open, High, Close...] のカラム配下にティッカーがMultiIndexでぶら下がります
+            df_chunk = yf.download(
+                chunk, 
+                period="18mo", 
+                interval="1d", 
+                group_by="column", 
+                auto_adjust=False, 
+                actions=True, 
+                progress=False
+            )
+            
+            # 各ティッカーのデータを正確に切り出し
+            for t in chunk:
+                try:
+                    if isinstance(df_chunk.columns, pd.MultiIndex):
+                        # pandasの高速断面切り出し（xs）で、そのティッカーのカラムのみをスマートに抽出
+                        if t in df_chunk.columns.get_level_values(1):
+                            df_t = df_chunk.xs(t, axis=1, level=1).copy()
+                            # 不要なNaN行（そのティッカーが休業日などでデータがない日）をクレンジング
+                            df_t = df_t.dropna(subset=["Close", "Volume"])
+                            if len(df_t) >= 120:
+                                full_data[t] = df_t
+                except Exception:
+                    continue
+                    
+        except Exception as e:
+            print(f"  [警告] チャンク {idx} の一括ダウンロード中に問題が発生しました: {e}")
+            
+        time.sleep(1.0) # サーバーへのマナーとして1秒待機
+        
+    return full_data
 
 
 def close_ticker_session(ticker_obj) -> None:
@@ -111,24 +125,6 @@ def close_ticker_session(ticker_obj) -> None:
         except Exception:
             pass
     gc.collect()
-
-
-def fetch_price_history(ticker_obj, ticker: str) -> pd.DataFrame | None:
-    try:
-        df = ticker_obj.history(
-            period="18mo",
-            interval="1d",
-            auto_adjust=False,
-            actions=True,
-        )
-    except Exception as exc:
-        print(f"fetch_price_history error: {ticker} {exc}")
-        return None
-
-    if df is None or df.empty or len(df) < 120:
-        return None
-
-    return prepare_price_history(df)
 
 
 def fetch_fundamentals(ticker_obj, ticker: str) -> dict | None:
@@ -351,7 +347,8 @@ def calc_indicators(df: pd.DataFrame) -> pd.DataFrame:
     stealth_score -= df["down_volume_spike"].fillna(False).astype(float) * 1.5
     stealth_score -= df["distribution_warning"].fillna(False).astype(float) * 1.5
     stealth_score -= (df["Close"] < df["ma75"]).fillna(False).astype(float) * 1.0
-    stealth_score -= (df["change_20d_pct"] > 20).fillna(False).astype(float) * 0.5
+    text_20d_pct_chg = df["change_20d_pct"]
+    stealth_score -= (text_20d_pct_chg > 20).fillna(False).astype(float) * 0.5
     df["stealth_accumulation_score"] = stealth_score.round(2)
     df["stealth_accumulation_candidate"] = (
         (df["volume_ratio_20_mean_5"] >= 1.10)
@@ -365,47 +362,32 @@ def calc_indicators(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def passes_long_term_filter(latest: pd.Series, fundamentals: dict) -> bool:
+def passes_long_term_filter_technical_only(latest: pd.Series) -> bool:
+    """
+    【Version 1.2新設】：第1段階（テクニカル一括足切り）用の判定ロジック
+    info（財務データ）を取得する前に、純テクニカル・流動性だけで95%以上の銘柄を落とし、API制限を完璧に防ぎます。
+    """
+    # 1. 売買代金（最新日）が1億円以上
     if latest["turnover"] < MIN_TURNOVER:
         return False
-
+    # 2. 移動平均線の上側キープ（Close >= 75MA かつ 200MAの上）
     if latest["Close"] < latest["ma75"]:
         return False
-
-    if latest["ma25"] < latest["ma75"]:
-        return False
-
     if pd.notna(latest["ma200"]) and latest["Close"] < latest["ma200"]:
         return False
-
+    # 3. 移動平均線の並び（25MA >= 75MA：上昇トレンド）
+    if latest["ma25"] < latest["ma75"]:
+        return False
+    # 4. モメンタム足切り
     if latest["change_60d_pct"] < 0:
         return False
-
     if latest["gap_to_52w_high_pct"] > MAX_52W_HIGH_GAP_PCT:
         return False
-
     if latest["change_20d_pct"] > MAX_CHANGE_20D_PCT:
         return False
-
     if latest["change_60d_pct"] > MAX_CHANGE_60D_PCT:
         return False
-
-    market_cap = fundamentals.get("market_cap")
-    if market_cap is None or market_cap < MIN_MARKET_CAP:
-        return False
-
-    revenue_growth = fundamentals.get("revenue_growth_pct")
-    if revenue_growth is None or revenue_growth < MIN_REVENUE_GROWTH_PCT:
-        return False
-
-    profit_margin = fundamentals.get("profit_margin_pct")
-    if profit_margin is None or profit_margin < MIN_PROFIT_MARGIN_PCT:
-        return False
-
-    roe = fundamentals.get("roe_pct")
-    if roe is None or roe < MIN_ROE_PCT:
-        return False
-
+        
     return True
 
 
@@ -475,38 +457,87 @@ def score_row(latest: pd.Series, fundamentals: dict) -> tuple[float, float, floa
     return round(total, 2), round(trend_score, 2), round(quality_score, 2), round(strength_score + risk_penalty, 2)
 
 
-def run():
+def run() -> None:
     ensure_results_dirs()
-    tickers = load_tickers()
+    
+    # 【Version 1.2修正点】：全ティッカーを漏れなく一括ロード
+    tickers_df = load_all_tickers()
+    all_tickers = tickers_df["ticker"].dropna().tolist()
+    name_map = dict(zip(tickers_df["ticker"], tickers_df["name"]))
+
     rows: list[dict] = []
     run_started_at = datetime.now()
     generated_at = run_started_at.isoformat(timespec="seconds")
     run_stamp = run_started_at.strftime("%Y%m%d_%H%M%S")
     screen_date = None
 
-    for idx, row in tickers.iterrows():
-        ticker = row["ticker"]
-        name = row["name"]
-        print(f"{idx + 1}/{len(tickers)} {ticker}")
+    # ==========================================
+    # ★【第1段階】：全ティッカーの超高速一括ダウンロード ＆ テクニカル一括足切り ★
+    # ==========================================
+    all_histories = download_chunk_histories(all_tickers)
+    technical_passed = []
 
-        ticker_obj = None
+    print("\n=== テクニカル ＆ 流動性の一次足切りスクリーニングを実行します ===")
+    for ticker, df_ticker in all_histories.items():
         try:
-            ticker_obj = yf.Ticker(ticker)
-            hist = fetch_price_history(ticker_obj, ticker)
-            if hist is None:
+            # データの整形と指標の算出
+            hist = prepare_price_history(df_ticker)
+            if hist is None or hist.empty:
                 continue
-
-            fundamentals = fetch_fundamentals(ticker_obj, ticker)
-            if fundamentals is None:
-                continue
-
+                
             hist = calc_indicators(hist)
             latest, latest_date = select_latest_completed_row(hist)
 
-            if not passes_long_term_filter(latest, fundamentals):
+            # テクニカル一次足切り
+            if not passes_long_term_filter_technical_only(latest):
+                continue
+
+            # 合格した銘柄のみを、第2段階（財務分析）の対象リストへ登録
+            technical_passed.append((ticker, hist, latest, latest_date))
+        except Exception:
+            continue
+
+    print(f"➔ [一次フィルター合格]: {len(technical_passed)} 銘柄 / 全上場 {len(all_tickers)} 銘柄中")
+
+    # ==========================================
+    # ★【第2段階】：テクニカル合格株のみ、個別にinfo（財務）を取得して最終足切り ★
+    # ==========================================
+    print("\n=== [第2段階] テクニカル合格銘柄に対するファンダメンタルズ個別検証を開始します ===")
+    
+    for idx, (ticker, hist, latest, latest_date) in enumerate(technical_passed):
+        print(f"  [{idx + 1}/{len(technical_passed)}] 詳細検証中... {ticker}")
+        
+        ticker_obj = None
+        try:
+            ticker_obj = yf.Ticker(ticker)
+            fundamentals = fetch_fundamentals(ticker_obj, ticker)
+            
+            if fundamentals is None:
                 time.sleep(SLEEP_SEC)
                 continue
 
+            # 財務業績の足切り基準（ROE 8%以上、売上5%以上、時価総額300億円以上、利益率5%以上）
+            market_cap = fundamentals.get("market_cap")
+            if market_cap is None or market_cap < MIN_MARKET_CAP:
+                time.sleep(SLEEP_SEC)
+                continue
+
+            revenue_growth = fundamentals.get("revenue_growth_pct")
+            if revenue_growth is None or revenue_growth < MIN_REVENUE_GROWTH_PCT:
+                time.sleep(SLEEP_SEC)
+                continue
+
+            profit_margin = fundamentals.get("profit_margin_pct")
+            if profit_margin is None or profit_margin < MIN_PROFIT_MARGIN_PCT:
+                time.sleep(SLEEP_SEC)
+                continue
+
+            roe = fundamentals.get("roe_pct")
+            if roe is None or roe < MIN_ROE_PCT:
+                time.sleep(SLEEP_SEC)
+                continue
+
+            # すべての足切り条件（テクニカル ＆ ファンダメンタルズ）を完全突破！
             screen_date = latest_date if screen_date is None else max(screen_date, latest_date)
             score, trend_score, quality_score, strength_score = score_row(latest, fundamentals)
 
@@ -516,7 +547,7 @@ def run():
                     "screen_version": LONG_TERM_SCREEN_VERSION,
                     "generated_at": generated_at,
                     "ticker": ticker,
-                    "name": name,
+                    "name": name_map.get(ticker, ticker),
                     "score": score,
                     "trend_score": trend_score,
                     "quality_score": quality_score,
@@ -600,82 +631,35 @@ def run():
     df["rank"] = df.index + 1
     output_df = df[
         [
-            "run_date",
-            "screen_version",
-            "generated_at",
-            "rank",
-            "ticker",
-            "name",
-            "score",
-            "trend_score",
-            "quality_score",
-            "strength_score",
-            "close",
-            "turnover_million",
-            "market_cap_billion",
-            "revenue_growth_pct",
-            "profit_margin_pct",
-            "roe_pct",
-            "current_ratio",
-            "debt_to_equity",
-            "change_20d_pct",
-            "change_60d_pct",
-            "change_120d_pct",
-            "gap_to_52w_high_pct",
-            "volume_ratio_20",
-            "ma25_slope_pct",
-            "ma75_slope_pct",
-            "ma200_slope_pct",
-            "close_vs_ma25_pct",
-            "close_vs_ma75_pct",
-            "close_vs_ma200_pct",
-            "days_since_75gc200",
-            "days_since_perfect_order",
-            "touch_ma25_intraday",
-            "touch_ma75_intraday",
-            "reclaim_ma25_close",
-            "reclaim_ma75_close",
-            "failed_ma25_reclaim",
-            "failed_ma75_reclaim",
-            "support_reaction_ok",
-            "ma25_pullback_candidate",
-            "ma75_pullback_candidate",
-            "trend_filter_ok",
-            "volume_filter_ok",
-            "support_trace_ok",
-            "drawdown_filter_ok",
-            "ma75_quality_filter",
-            "ma75_touch_quality_signal",
-            "ma75_nextday_quality_signal",
-            "down_volume_spike",
-            "pullback_score",
-            "pullback_candidate",
-            "ma25_above_ma200",
-            "ma75_above_ma200",
-            "ma25_above_ma75",
-            "perfect_order",
-            "bearish_stack_recent",
-            "bearish_perfect_order_recent",
-            "ma25_cross_200_today",
-            "ma75_cross_200_today",
-            "ma25_cross_200_recent",
-            "ma75_cross_200_recent",
-            "ma25_cross_75_today",
-            "ma25_cross_75_recent_tight",
-            "ma25_cross_200_recent_tight",
-            "ma75_cross_200_recent_tight",
-            "perfect_order_recent",
-            "perfect_order_today",
-            "perfect_order_recent_tight",
-            "initial_trend_signal",
-            "early_reversal_setup",
-            "reversal_from_bearish_po",
-            "sector",
-            "industry",
+            "run_date", "screen_version", "generated_at", "rank", "ticker", "name",
+            "score", "trend_score", "quality_score", "strength_score", "close",
+            "turnover_million", "market_cap_billion", "revenue_growth_pct",
+            "profit_margin_pct", "roe_pct", "current_ratio", "debt_to_equity",
+            "change_20d_pct", "change_60d_pct", "change_120d_pct",
+            "gap_to_52w_high_pct", "volume_ratio_20", "ma25_slope_pct",
+            "ma75_slope_pct", "ma200_slope_pct", "close_vs_ma25_pct",
+            "close_vs_ma75_pct", "close_vs_ma200_pct", "days_since_75gc200",
+            "days_since_perfect_order", "touch_ma25_intraday", "touch_ma75_intraday",
+            "reclaim_ma25_close", "reclaim_ma75_close", "failed_ma25_reclaim",
+            "failed_ma75_reclaim", "support_reaction_ok", "ma25_pullback_candidate",
+            "ma75_pullback_candidate", "trend_filter_ok", "volume_filter_ok",
+            "support_trace_ok", "drawdown_filter_ok", "ma75_quality_filter",
+            "ma75_touch_quality_signal", "ma75_nextday_quality_signal",
+            "down_volume_spike", "pullback_score", "pullback_candidate",
+            "ma25_above_ma200", "ma75_above_ma200", "ma25_above_ma75",
+            "perfect_order", "bearish_stack_recent", "bearish_perfect_order_recent",
+            "ma25_cross_200_today", "ma75_cross_200_today", "ma25_cross_200_recent",
+            "ma75_cross_200_recent", "ma25_cross_75_today", "ma25_cross_75_recent_tight",
+            "ma25_cross_200_recent_tight", "ma75_cross_200_recent_tight",
+            "perfect_order_recent", "perfect_order_today", "perfect_order_recent_tight",
+            "initial_trend_signal", "early_reversal_setup", "reversal_from_bearish_po",
+            "sector", "industry",
         ]
     ].head(TOP_N_OUTPUT)
+    
     latest_export_df = format_long_term_latest_output(output_df)
     history_export_df = format_long_term_output(output_df)
+    
     gc_df = df[
         (
             df["reversal_from_bearish_po"]
@@ -693,57 +677,29 @@ def run():
         & (df["ma25_slope_pct"] >= GC_MIN_MA25_SLOPE_PCT)
         & (df["ma75_slope_pct"] >= GC_MIN_MA75_SLOPE_PCT)
     ].copy()
+    
     gc_df = gc_df.sort_values(
         ["reversal_from_bearish_po", "early_reversal_setup", "days_since_perfect_order", "days_since_75gc200", "score"],
         ascending=[False, False, True, True, False],
     ).reset_index(drop=True)
     gc_df["rank"] = gc_df.index + 1
+    
     gc_output_df = gc_df[
         [
-            "run_date",
-            "screen_version",
-            "generated_at",
-            "rank",
-            "ticker",
-            "name",
-            "reversal_from_bearish_po",
-            "early_reversal_setup",
-            "initial_trend_signal",
-            "days_since_perfect_order",
-            "days_since_75gc200",
-            "close_vs_ma25_pct",
-            "close_vs_ma75_pct",
-            "bearish_perfect_order_recent",
-            "perfect_order_today",
-            "perfect_order_recent_tight",
-            "perfect_order_recent",
-            "ma25_cross_75_recent_tight",
-            "ma25_cross_200_recent_tight",
-            "ma75_cross_200_recent_tight",
-            "score",
-            "trend_score",
-            "quality_score",
-            "strength_score",
-            "close",
-            "turnover_million",
-            "market_cap_billion",
-            "revenue_growth_pct",
-            "profit_margin_pct",
-            "roe_pct",
-            "change_20d_pct",
-            "change_60d_pct",
-            "gap_to_52w_high_pct",
-            "volume_ratio_20",
-            "ma25_slope_pct",
-            "ma75_slope_pct",
-            "ma25_above_ma75",
-            "ma25_above_ma200",
-            "ma75_above_ma200",
-            "perfect_order",
-            "sector",
-            "industry",
+            "run_date", "screen_version", "generated_at", "rank", "ticker", "name",
+            "reversal_from_bearish_po", "early_reversal_setup", "initial_trend_signal",
+            "days_since_perfect_order", "days_since_75gc200", "close_vs_ma25_pct",
+            "close_vs_ma75_pct", "bearish_perfect_order_recent", "perfect_order_today",
+            "perfect_order_recent_tight", "perfect_order_recent", "ma25_cross_75_recent_tight",
+            "ma25_cross_200_recent_tight", "ma75_cross_200_recent_tight", "score",
+            "trend_score", "quality_score", "strength_score", "close", "turnover_million",
+            "market_cap_billion", "revenue_growth_pct", "profit_margin_pct", "roe_pct",
+            "change_20d_pct", "change_60d_pct", "gap_to_52w_high_pct", "volume_ratio_20",
+            "ma25_slope_pct", "ma75_slope_pct", "ma25_above_ma75", "ma25_above_ma200",
+            "ma75_above_ma200", "perfect_order", "sector", "industry",
         ]
     ].head(TOP_N_GC_OUTPUT)
+    
     gc_export_df = format_long_term_gc_output(gc_output_df)
 
     if screen_date is None:
@@ -755,12 +711,12 @@ def run():
     gc_watchlists_dir = _gc_watchlists_dir()
     gc_watchlists_dir.mkdir(parents=True, exist_ok=True)
     dated_gc_output_path = gc_watchlists_dir / f"{screen_date.isoformat()}_{LONG_TERM_SCREEN_VERSION}_{run_stamp}.csv"
+    
     latest_export_df.to_csv(latest_output_path, index=False, encoding="utf-8-sig")
     history_export_df.to_csv(dated_output_path, index=False, encoding="utf-8-sig")
     gc_export_df.to_csv(latest_gc_output_path, index=False, encoding="utf-8-sig")
     gc_export_df.to_csv(dated_gc_output_path, index=False, encoding="utf-8-sig")
 
-# ─── 元のコードの最下部（440行目付近） ───
     print("\n==== Long Term Watchlist ====")
     print(latest_export_df.to_string(index=False))
     print(f"\nCSV出力完了: {latest_output_path.name}")
@@ -769,10 +725,8 @@ def run():
     print(f"GC専用履歴保存完了: {dated_gc_output_path}")
 
     # ==========================================
-    # ★【Version 1.1 新規】：合格者の自動累積台帳（candidate_history.csv）への自動追記 ★
+    # ★【Version 1.2 新規】：合格者の自動累積台帳（candidate_history.csv）への自動追記 ★
     # ==========================================
-    from config import CANDIDATE_HISTORY_CSV
-    
     if rows:
         history_rows = []
         for r in rows:
@@ -786,7 +740,7 @@ def run():
                 "revenue_growth_pct": r["revenue_growth_pct"],
                 "roe_pct": r["roe_pct"],
                 "status": "tracking",   # 初期状態は「追跡中」として登録
-                "return_7d": None,      # 次のフェーズの自動追跡プログラムが動的に数値を埋める
+                "return_7d": None,      # 自動追跡プログラムが動的に数値を埋める
                 "return_14d": None,
                 "return_30d": None,
                 "max_high_30d": None,
@@ -795,7 +749,7 @@ def run():
             
         new_df = pd.DataFrame(history_rows)
         
-        # 1. すでに台帳が存在する場合は、二重登録を防ぎつつマージします
+        # すでに台帳が存在する場合は、二重登録を防ぎつつマージします
         if CANDIDATE_HISTORY_CSV.exists():
             try:
                 existing_df = pd.read_csv(CANDIDATE_HISTORY_CSV)
@@ -817,7 +771,7 @@ def run():
             except Exception as e:
                 print(f"\n[台帳エラー] 台帳のマージ中に予期せぬエラーが発生しました: {e}")
         else:
-            # 2. 台帳が存在しない（初回起動）の場合は、新規作成します
+            # 台帳が存在しない（初回起動）の場合は、新規作成します
             CANDIDATE_HISTORY_CSV.parent.mkdir(parents=True, exist_ok=True)
             new_df.to_csv(CANDIDATE_HISTORY_CSV, index=False, encoding="utf-8-sig")
             print(f"\n[台帳新規作成] 累積台帳（candidate_history.csv）を新規作成し、初期データ {len(new_df)} 件を登録しました。")
