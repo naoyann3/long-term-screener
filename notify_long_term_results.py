@@ -1,4 +1,4 @@
-# notify_long_term_results.py (Version 1.0)
+# notify_long_term_results.py (Version 1.1 - Multi Link Complete Edition)
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 import os
@@ -18,9 +18,22 @@ NOTIFICATION_EMAIL = os.environ.get("NOTIFICATION_EMAIL")
 SENDER_NAME = "Sniper OS - Long Term Screener"
 
 
-def get_tv_link(ticker: str) -> str:
+def get_chart_links(ticker: str) -> str:
+    """
+    あなたが作成された、株探決算・Yahoo!掲示板を含む美しい3行インデントリンク生成ロジック
+    """
     code = ticker.split(".")[0] if "." in ticker else ticker
-    return f"https://jp.tradingview.com/chart/?symbol=TSE:{code}"
+    tradingview_url = f"https://jp.tradingview.com/chart/?symbol=TSE:{code}"
+    kabutan_url = f"https://kabutan.jp/stock/finance?code={code}"
+    yahoo_url = f"https://finance.yahoo.co.jp/quote/{code}/forum"
+
+    # 見やすさと対称性を考慮した改行インデント形式
+    return (
+        f"\n"
+        f"      ・📈 [TradingView でチャート分析]({tradingview_url})\n"
+        f"      ・📊 [株探 で個別株決算分析]({kabutan_url})\n"
+        f"      ・🏦 [Yahoo!掲示板 でリアルな大衆心理]({yahoo_url})"
+    )
 
 
 def build_mail_body(latest_df: pd.DataFrame, history_df: pd.DataFrame) -> str:
@@ -35,7 +48,7 @@ def build_mail_body(latest_df: pd.DataFrame, history_df: pd.DataFrame) -> str:
     body += "パーフェクトオーダーかつ高い利益率（ROE 8%以上）、売上成長（5%以上）を満たした中期成長候補の一覧です。\n"
     body += "----------------------------------------\n\n"
 
-    # スコア上位10件を表示（多すぎるとメールが長くなるため、厳選表示）
+    # スコア上位10件を表示
     top_10 = latest_df.head(10)
     for idx, r in top_10.iterrows():
         rank = r.get("監視順位", r.get("rank", idx + 1))
@@ -47,26 +60,20 @@ def build_mail_body(latest_df: pd.DataFrame, history_df: pd.DataFrame) -> str:
         growth = r.get("売上成長率(%)", r.get("revenue_growth_pct"))
         cap = r.get("時価総額(十億円)", r.get("market_cap_billion"))
 
-        tv_link = get_tv_link(ticker)
-        kabutan_link = f"https://kabutan.jp/stock/?code={ticker.split('.')[0]}"
+        # あなたが設計した美しい3行箇条書きリンクを取得して印字
+        links_text = get_chart_links(ticker)
 
-        body += f"## {rank}. {name} ({ticker})\n"
-        body += f"      ・📈 [TradingView でチャート分析]({tv_link})\n"
-        body += f"      ・📊 [株探 で企業財務・ニュース]({kabutan_link})\n"
+        body += f"## {rank}. {name} ({ticker}){links_text}\n"
         body += f"  ・総合スコア: **{score:.1f}点** (終値: {close:.1f}円 / 時価総額: {cap:.1f}十億円)\n"
         body += f"  ・財務業績  : ROE: **{roe:.1f}%** ｜ 売上成長率: **{growth:.1f}%**\n"
-
-        # 特徴的なテクニカル要素を抽出して動的解説
-        po_days = r.get("PO形成からの日数", None)
-        is_reversal = r.get("逆PO→上昇PO転換", False)
-        is_pullback = r.get("押し目候補シグナル", False)
-
-        if pd.notna(po_days) and int(po_days) <= 10:
-            body += f"  ・📢【動的解説】: 移動平均パーフェクトオーダー（PO）が形成されてからわずか **{int(po_days)}日目** の、極めて新鮮な上昇初期トレンドです。\n"
-        elif is_reversal:
-            body += "  ・📢【動的解説】: 逆パーフェクトオーダー（下落トレンド）から急反転し、上昇パーフェクトオーダーへ大復活を遂げた劇的な転換初期形状です。\n"
-        elif is_pullback:
-            body += "  ・📢【動的解説】: 綺麗な上昇パーフェクトオーダーを維持したまま、移動平均線付近まで一時的に株価が「押し目」を形成している狙い目の位置です。\n"
+        
+        # 動的シグナル解説
+        if r.get("reversal_from_bearish_po"):
+            body += "  ・📢【動的着眼点】: 長期の下降（逆PO）から『上昇パーフェクトオーダー』へとトレンドの主導権が完全に切り替わった、大転換初日の新鮮な形状です。\n"
+        elif r.get("early_reversal_setup"):
+            body += "  ・📢【動的着眼点】: 下降トレンドの底固めから、25日線が75日線をGC。中期的な反転準備のパターントリガーが引かれました。\n"
+        elif r.get("reclaim_ma75_close"):
+            body += "  ・📢【動的着眼点】: 綺麗なパーフェクトオーダーを維持しながら、中期75日移動平均線での反発（サポート反応）を確認した絶好の押し目位置です。\n"
         else:
             body += "  ・📢【動的解説】: 強固な上昇トレンドを維持した中期優良成長株。主要移動平均線の支持線としての機能を観察してください。\n"
 
@@ -75,18 +82,17 @@ def build_mail_body(latest_df: pd.DataFrame, history_df: pd.DataFrame) -> str:
     if len(latest_df) > 10:
         body += f"※他 {len(latest_df) - 10} 銘柄が合格。詳細は results フォルダ内の long_term_watchlist.csv をご確認ください。\n\n"
 
-    # 2. 🔁 【自動復習・答え合わせコーナー（Review Corner）】
+    # 2. 🔁 【自動復習・答え合わせコーナー】
     body += "## 🔁 【復習コーナー（Review Corner）】\n"
     body += "過去に合格台帳に登録された銘柄たちが、その後どのように推移しているかを自動で答え合わせします。\n\n"
 
     if not history_df.empty:
         history_dates = sorted(history_df["date"].unique())
-        # 本日（最新日）を省いた、過去の日付を抽出
         history_dates = [d for d in history_dates if d != today_str]
 
         if len(history_dates) >= 1:
-            prev_date = history_dates[-1]  # 最も直近の過去日
-            prev_items = history_df[history_df["date"] == prev_date].head(3)  # 最大3件をピックアップ
+            prev_date = history_dates[-1]
+            prev_items = history_df[history_df["date"] == prev_date].head(3)
 
             body += f"📅 【前回（ {prev_date} ）合格の教材たちのその後の経過】:\n"
             for _, r in prev_items.iterrows():
@@ -110,7 +116,7 @@ def build_mail_body(latest_df: pd.DataFrame, history_df: pd.DataFrame) -> str:
     else:
         body += "  ・過去の合格銘柄データがまだありません。明日以降、自動追跡が開始されます。\n\n"
 
-    # 3. 🧪 【自律統計コーナー（Research Notes）】
+    # 3. 🧪 【自律統計コーナー】
     body += "## 🧪 【中期スクリーニング自律統計】\n"
     if not history_df.empty:
         completed_df = history_df[history_df["status"] == "completed"]
@@ -142,7 +148,6 @@ def notify() -> None:
         print("警告: メールの認証情報、または通知先アドレスが未設定です。")
         return
 
-    # 本日の最新合格ファイルを参照
     latest_file = Path("long_term_watchlist.csv")
     if not latest_file.exists():
         print(f"最新の合格ファイル {latest_file} が見つかりません。")
@@ -158,7 +163,6 @@ def notify() -> None:
         print("本日のスクリーニング合格者は0件です。通知をスキップします。")
         return
 
-    # 追跡台帳をロード
     history_df = pd.DataFrame()
     if CANDIDATE_HISTORY_CSV.exists():
         try:
