@@ -3,6 +3,7 @@ name: Long Term Stock Screener
 on:
   workflow_dispatch:
   schedule:
+    # 毎日日本時間21:00 (UTC 12:00) に自動実行
     - cron: "0 12 * * 1-5"
 
 jobs:
@@ -16,24 +17,16 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          ref: master
+          # ActionsによるGitプッシュを可能にするためにトークンを自動適用
+          token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Prepare persisted directories
         run: |
           mkdir -p results/long_term_watchlists
           mkdir -p results/long_term_tracking
           mkdir -p results/long_term_gc_watchlists
-
-      - name: Restore long-term history
-        uses: actions/cache/restore@v4
-        with:
-          path: |
-            results/long_term_watchlists
-            results/long_term_tracking
-            results/long_term_gc_watchlists
-            universe_offset.txt
-          key: long-term-screener-history-${{ github.ref_name }}-${{ github.run_id }}
-          restore-keys: |
-            long-term-screener-history-${{ github.ref_name }}-
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -57,16 +50,32 @@ jobs:
         run: |
           python track_long_term_positions.py
 
-      - name: Save long-term history
-        if: always()
-        uses: actions/cache/save@v4
-        with:
-          path: |
-            results/long_term_watchlists
-            results/long_term_tracking
-            results/long_term_gc_watchlists
-            universe_offset.txt
-          key: long-term-screener-history-${{ github.ref_name }}-${{ github.run_id }}
+      # 【最重要：フェーズ1追加】更新された全データベースを確実にGit自動コミット＆プッシュ（永続化）
+      - name: Commit and push changes
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          
+          # 1. ルート直下の更新ファイルをステージ
+          for file in long_term_watchlist.csv long_term_gc_watchlist.csv long_term_tracking.csv tracked_tickers.csv universe_offset.txt; do
+            if [ -f "$file" ]; then
+              git add "$file"
+            fi
+          done
+          
+          # 2. results ディレクトリ配下の更新ファイルを一括ステージ
+          if [ -d "results" ]; then
+            git add results/
+          fi
+          
+          # 3. 差分があればプッシュ
+          if ! git diff --cached --quiet; then
+            # [skip ci] を含めることで、自分自身のコミットによるActionsの無限ループを防ぎます
+            git commit -m "Auto-update daily long term screener data [skip ci]"
+            git push origin master
+          else
+            echo "No changes to commit"
+          fi
 
       - name: Upload result CSV files
         if: always()
