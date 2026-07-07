@@ -1,4 +1,4 @@
-# long_term_screener.py (Version 1.2 - Two-Stage Hybrid Full Scan Edition)
+# long_term_screener.py (Version 1.3 - Ultra Robust IP-Safe Edition)
 from __future__ import annotations
 
 from datetime import datetime
@@ -17,9 +17,10 @@ TICKERS_CSV = "tickers.csv"
 OUTPUT_CSV = "long_term_watchlist.csv"
 GC_OUTPUT_CSV = "long_term_gc_watchlist.csv"
 
-# 1回あたりに一括ロードするチャンクサイズ（yfinanceの1回あたりの最大指定制限）
+# 1回あたりに一括ロードするチャンクサイズ
 DOWNLOAD_CHUNK_SIZE = 400
-SLEEP_SEC = 0.8
+# info(財務データ)取得時の、IPブロックを完全に防ぐ安全インターバル待機時間
+SLEEP_SEC = 1.5
 TOP_N_OUTPUT = 50
 TOP_N_GC_OUTPUT = 20
 
@@ -28,7 +29,7 @@ MIN_MARKET_CAP = 30_000_000_000
 MIN_REVENUE_GROWTH_PCT = 5.0
 MIN_PROFIT_MARGIN_PCT = 5.0
 MIN_ROE_PCT = 8.0
-MAX_52W_HIGH_GAP_PCT = 20.0
+MAX_52W_HIGH_GAP_PCT = 10.0        # ★【Version 1.3厳格化】：52週高値から10%以内（ブレイク直前）のみ厳選
 MAX_CHANGE_20D_PCT = 25.0
 MAX_CHANGE_60D_PCT = 80.0
 RECENT_CROSS_LOOKBACK = 10
@@ -56,10 +57,6 @@ def _gc_watchlists_dir() -> Path:
 
 
 def load_all_tickers() -> pd.DataFrame:
-    """
-    【Version 1.2修正点】：毎日全数スキャンが可能になったため、
-    ローテーション用のoffset制限を完全に廃止し、tickers.csvに登録された全数を一括ロードします。
-    """
     df = pd.read_csv(_ticker_path())
     df = df.dropna(subset=["ticker"])
     df["ticker"] = df["ticker"].astype(str).str.strip()
@@ -69,10 +66,6 @@ def load_all_tickers() -> pd.DataFrame:
 
 
 def download_chunk_histories(tickers: list[str]) -> dict[str, pd.DataFrame]:
-    """
-    【Version 1.2新設】：yfinanceの一括高速ダウンロード機能（yf.download）を利用し、
-    数百ティッカーずつグループ化（チャンク）して価格データを数秒で一網打尽にします。
-    """
     full_data = {}
     chunks = [tickers[i:i + DOWNLOAD_CHUNK_SIZE] for i in range(0, len(tickers), DOWNLOAD_CHUNK_SIZE)]
     
@@ -81,7 +74,6 @@ def download_chunk_histories(tickers: list[str]) -> dict[str, pd.DataFrame]:
     for idx, chunk in enumerate(chunks, 1):
         print(f"  ・ダウンロード中 ({idx}/{len(chunks)})... {len(chunk)} 銘柄")
         try:
-            # group_by="column" により、[Open, High, Close...] のカラム配下にティッカーがMultiIndexでぶら下がります
             df_chunk = yf.download(
                 chunk, 
                 period="18mo", 
@@ -92,14 +84,11 @@ def download_chunk_histories(tickers: list[str]) -> dict[str, pd.DataFrame]:
                 progress=False
             )
             
-            # 各ティッカーのデータを正確に切り出し
             for t in chunk:
                 try:
                     if isinstance(df_chunk.columns, pd.MultiIndex):
-                        # pandasの高速断面切り出し（xs）で、そのティッカーのカラムのみをスマートに抽出
                         if t in df_chunk.columns.get_level_values(1):
                             df_t = df_chunk.xs(t, axis=1, level=1).copy()
-                            # 不要なNaN行（そのティッカーが休業日などでデータがない日）をクレンジング
                             df_t = df_t.dropna(subset=["Close", "Volume"])
                             if len(df_t) >= 120:
                                 full_data[t] = df_t
@@ -109,7 +98,7 @@ def download_chunk_histories(tickers: list[str]) -> dict[str, pd.DataFrame]:
         except Exception as e:
             print(f"  [警告] チャンク {idx} の一括ダウンロード中に問題が発生しました: {e}")
             
-        time.sleep(1.0) # サーバーへのマナーとして1秒待機
+        time.sleep(1.0)
         
     return full_data
 
@@ -364,24 +353,29 @@ def calc_indicators(df: pd.DataFrame) -> pd.DataFrame:
 
 def passes_long_term_filter_technical_only(latest: pd.Series) -> bool:
     """
-    【Version 1.2新設】：第1段階（テクニカル一括足切り）用の判定ロジック
-    info（財務データ）を取得する前に、純テクニカル・流動性だけで95%以上の銘柄を落とし、API制限を完璧に防ぎます。
+    【Version 1.3厳格化】：第1段階（テクニカル一括足切り）用の判定ロジック
+    全上場スキャンを安全に稼働させるため、完全POかつ52週高値から10%以内（ブレイク寸前）に条件を絞り込み、
+    第2段階に進むエリート銘柄を30〜50社前後に徹底して抑え込みます。
     """
     # 1. 売買代金（最新日）が1億円以上
     if latest["turnover"] < MIN_TURNOVER:
         return False
-    # 2. 移動平均線の上側キープ（Close >= 75MA かつ 200MAの上）
-    if latest["Close"] < latest["ma75"]:
+        
+    # 2. 【Version 1.3厳選】：移動平均線の上向き完全上昇パーフェクトオーダー（PO）が成立していること
+    # (Close >= 25MA > 75MA > 200MA) ＆ (25MAと75MAが上向き)
+    if not (latest["ma25"] > latest["ma75"] > latest["ma200"]):
         return False
-    if pd.notna(latest["ma200"]) and latest["Close"] < latest["ma200"]:
+    if latest["Close"] < latest["ma25"]:
         return False
-    # 3. 移動平均線の並び（25MA >= 75MA：上昇トレンド）
-    if latest["ma25"] < latest["ma75"]:
+    if latest["ma25_slope_pct"] <= 0 or latest["ma75_slope_pct"] <= 0:
         return False
+        
+    # 3. 【Version 1.3厳選】：52週高値から「10.0%以内」に肉薄していること（ブレイク直前の本命株）
+    if latest["gap_to_52w_high_pct"] > MAX_52W_HIGH_GAP_PCT:
+        return False
+        
     # 4. モメンタム足切り
     if latest["change_60d_pct"] < 0:
-        return False
-    if latest["gap_to_52w_high_pct"] > MAX_52W_HIGH_GAP_PCT:
         return False
     if latest["change_20d_pct"] > MAX_CHANGE_20D_PCT:
         return False
@@ -460,7 +454,6 @@ def score_row(latest: pd.Series, fundamentals: dict) -> tuple[float, float, floa
 def run() -> None:
     ensure_results_dirs()
     
-    # 【Version 1.2修正点】：全ティッカーを漏れなく一括ロード
     tickers_df = load_all_tickers()
     all_tickers = tickers_df["ticker"].dropna().tolist()
     name_map = dict(zip(tickers_df["ticker"], tickers_df["name"]))
@@ -480,7 +473,6 @@ def run() -> None:
     print("\n=== テクニカル ＆ 流動性の一次足切りスクリーニングを実行します ===")
     for ticker, df_ticker in all_histories.items():
         try:
-            # データの整形と指標の算出
             hist = prepare_price_history(df_ticker)
             if hist is None or hist.empty:
                 continue
@@ -488,11 +480,9 @@ def run() -> None:
             hist = calc_indicators(hist)
             latest, latest_date = select_latest_completed_row(hist)
 
-            # テクニカル一次足切り
             if not passes_long_term_filter_technical_only(latest):
                 continue
 
-            # 合格した銘柄のみを、第2段階（財務分析）の対象リストへ登録
             technical_passed.append((ticker, hist, latest, latest_date))
         except Exception:
             continue
@@ -502,10 +492,10 @@ def run() -> None:
     # ==========================================
     # ★【第2段階】：テクニカル合格株のみ、個別にinfo（財務）を取得して最終足切り ★
     # ==========================================
-    print("\n=== [第2段階] テクニカル合格銘柄に対するファンダメンタルズ個別検証を開始します ===")
+    print("\n=== [第2段階] テクニカル合格銘柄に対するファンダメンタルズ個別精査を開始します ===")
     
     for idx, (ticker, hist, latest, latest_date) in enumerate(technical_passed):
-        print(f"  [{idx + 1}/{len(technical_passed)}] 詳細検証中... {ticker}")
+        print(f"  [{idx + 1}/{len(technical_passed)}] 詳細精査中... {ticker}")
         
         ticker_obj = None
         try:
@@ -516,7 +506,6 @@ def run() -> None:
                 time.sleep(SLEEP_SEC)
                 continue
 
-            # 財務業績の足切り基準（ROE 8%以上、売上5%以上、時価総額300億円以上、利益率5%以上）
             market_cap = fundamentals.get("market_cap")
             if market_cap is None or market_cap < MIN_MARKET_CAP:
                 time.sleep(SLEEP_SEC)
@@ -537,7 +526,6 @@ def run() -> None:
                 time.sleep(SLEEP_SEC)
                 continue
 
-            # すべての足切り条件（テクニカル ＆ ファンダメンタルズ）を完全突破！
             screen_date = latest_date if screen_date is None else max(screen_date, latest_date)
             score, trend_score, quality_score, strength_score = score_row(latest, fundamentals)
 
@@ -725,7 +713,7 @@ def run() -> None:
     print(f"GC専用履歴保存完了: {dated_gc_output_path}")
 
     # ==========================================
-    # ★【Version 1.2 新規】：合格者の自動累積台帳（candidate_history.csv）への自動追記 ★
+    # ★【Version 1.3 修正】：合格者の自動累積台帳（candidate_history.csv）への自動追記 ★
     # ==========================================
     if rows:
         history_rows = []
