@@ -104,10 +104,18 @@ def build_mail_body(latest_df: pd.DataFrame, history_df: pd.DataFrame) -> str:
                     ticker_obj = yf.Ticker(ticker)
                     hist = ticker_obj.history(period="5d", interval="1d", auto_adjust=False)
                     if not hist.empty:
-                        curr_c = float(hist["Close"].iloc[-1])
-                        perf = (curr_c - orig_c) / orig_c * 100
-                        icon = "📈" if perf >= 0 else "📉"
-                        body += f"  ・{icon} **{name} ({ticker})** ➔ 登録時: {orig_c:.1f}円 ➔ 本日終値: {curr_c:.1f}円 (騰落: **{perf:+.1f}%**)\n"
+                        # 👈 ★【Version 1.2修正点】：yfinanceが取引時間外に生成する、Closeが「NaN」のダミー行を完全に一掃します
+                        hist = hist.dropna(subset=["Close"])
+                        
+                        if not hist.empty:
+                            curr_c = float(hist["Close"].iloc[-1])
+                            perf = (curr_c - orig_c) / orig_c * 100
+                            icon = "📈" if perf >= 0 else "📉"
+                            body += f"  ・{icon} **{name} ({ticker})** ➔ 登録時: {orig_c:.1f}円 ➔ 本日終値: {curr_c:.1f}円 (騰落: **{perf:+.1f}%**)\n"
+                        else:
+                            body += f"  ・ **{name} ({ticker})** ➔ 登録時: {orig_c:.1f}円 (追跡中: 価格更新待ち)\n"
+                    else:
+                        body += f"  ・ **{name} ({ticker})** ➔ 登録時: {orig_c:.1f}円 (追跡中)\n"
                 except Exception:
                     body += f"  ・ **{name} ({ticker})** ➔ 登録時: {orig_c:.1f}円 (追跡中)\n"
             body += "\n"
