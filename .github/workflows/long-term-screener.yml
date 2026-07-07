@@ -18,7 +18,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          ref: master
+          # 👇 【修正点】：ref: master の固定指定を削除し、自動ブランチ判別に変更
           # ActionsによるGitプッシュを可能にするためにトークンを自動適用
           token: ${{ secrets.GITHUB_TOKEN }}
 
@@ -70,9 +70,9 @@ jobs:
           
           # 3. 差分があればプッシュ
           if ! git diff --cached --quiet; then
-            # [skip ci] を含めることで、自分自身のコミットによるActionsの無限ループを防ぎます
             git commit -m "Auto-update daily long term screener data [skip ci]"
-            git push origin master
+            # 👇 【修正点】：origin master の指定を削除し、現在のブランチに安全にプッシュ
+            git push
           else
             echo "No changes to commit"
           fi
