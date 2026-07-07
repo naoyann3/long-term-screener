@@ -54,10 +54,19 @@ jobs:
         run: |
           python track_long_term_positions.py
 
-      # 👇 【フェーズ2：新規追加】：台帳に載っている過去の合格銘柄の「その後の成績」を自動追跡
+      # 【フェーズ2：新規追加】：台帳に載っている過去の合格銘柄の「その後の成績」を自動追跡
       - name: Track candidates performance
         run: |
           python track_candidates_performance.py
+
+      # 👇 【フェーズ3：新規追加】：スキャン結果・自動答え合わせ・期待値の自動メール送信
+      - name: Run notifications
+        env:
+          GMAIL_USER: ${{ secrets.GMAIL_USER }}
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+          NOTIFICATION_EMAIL: ${{ secrets.NOTIFICATION_EMAIL }}
+        run: |
+          python notify_long_term_results.py
 
       # 【最重要：フェーズ1追加】更新された全データベースを確実にGit自動コミット＆プッシュ（永続化）
       - name: Commit and push changes
