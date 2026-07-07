@@ -760,12 +760,67 @@ def run():
     gc_export_df.to_csv(latest_gc_output_path, index=False, encoding="utf-8-sig")
     gc_export_df.to_csv(dated_gc_output_path, index=False, encoding="utf-8-sig")
 
+# ─── 元のコードの最下部（440行目付近） ───
     print("\n==== Long Term Watchlist ====")
     print(latest_export_df.to_string(index=False))
     print(f"\nCSV出力完了: {latest_output_path.name}")
     print(f"履歴保存完了: {dated_output_path}")
     print(f"GC専用出力完了: {latest_gc_output_path.name}")
     print(f"GC専用履歴保存完了: {dated_gc_output_path}")
+
+    # ==========================================
+    # ★【Version 1.1 新規】：合格者の自動累積台帳（candidate_history.csv）への自動追記 ★
+    # ==========================================
+    from config import CANDIDATE_HISTORY_CSV
+    
+    if rows:
+        history_rows = []
+        for r in rows:
+            history_rows.append({
+                "date": r["run_date"],
+                "ticker": r["ticker"],
+                "name": r["name"],
+                "score": r["score"],
+                "close_at_trigger": r["close"],
+                "ma200_slope_pct": r["ma200_slope_pct"] if r["ma200_slope_pct"] is not None else 0.0,
+                "revenue_growth_pct": r["revenue_growth_pct"],
+                "roe_pct": r["roe_pct"],
+                "status": "tracking",   # 初期状態は「追跡中」として登録
+                "return_7d": None,      # 次のフェーズの自動追跡プログラムが動的に数値を埋める
+                "return_14d": None,
+                "return_30d": None,
+                "max_high_30d": None,
+                "max_dd_30d": None
+            })
+            
+        new_df = pd.DataFrame(history_rows)
+        
+        # 1. すでに台帳が存在する場合は、二重登録を防ぎつつマージします
+        if CANDIDATE_HISTORY_CSV.exists():
+            try:
+                existing_df = pd.read_csv(CANDIDATE_HISTORY_CSV)
+                
+                # 重複防止：(日付, ティッカー)のペアが既存にない新規データのみに絞り込む
+                existing_keys = set(zip(existing_df["date"].astype(str), existing_df["ticker"].astype(str)))
+                filtered_rows = [
+                    row for row in history_rows if (str(row["date"]), str(row["ticker"])) not in existing_keys
+                ]
+                
+                if filtered_rows:
+                    append_df = pd.DataFrame(filtered_rows)
+                    combined_df = pd.concat([existing_df, append_df], ignore_index=True)
+                    combined_df.to_csv(CANDIDATE_HISTORY_CSV, index=False, encoding="utf-8-sig")
+                    print(f"\n[台帳保存成功] 新しく {len(filtered_rows)} 件の中期合格銘柄を candidate_history.csv に追加登録しました。")
+                else:
+                    print("\n[台帳スキップ] 本日の合格銘柄は、すでに台帳に記録済みです。")
+                    
+            except Exception as e:
+                print(f"\n[台帳エラー] 台帳のマージ中に予期せぬエラーが発生しました: {e}")
+        else:
+            # 2. 台帳が存在しない（初回起動）の場合は、新規作成します
+            CANDIDATE_HISTORY_CSV.parent.mkdir(parents=True, exist_ok=True)
+            new_df.to_csv(CANDIDATE_HISTORY_CSV, index=False, encoding="utf-8-sig")
+            print(f"\n[台帳新規作成] 累積台帳（candidate_history.csv）を新規作成し、初期データ {len(new_df)} 件を登録しました。")
 
 
 if __name__ == "__main__":
