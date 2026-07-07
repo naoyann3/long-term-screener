@@ -6,6 +6,10 @@ on:
     # 毎日日本時間21:00 (UTC 12:00) に自動実行
     - cron: "0 12 * * 1-5"
 
+# 👇 【ここから追記】：GitHub Actionsからリポジトリへの書き込み（プッシュ）を正式に許可
+permissions:
+  contents: write
+
 jobs:
   run-long-term-screener:
     runs-on: ubuntu-latest
