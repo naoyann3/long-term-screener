@@ -1,4 +1,4 @@
-# long_term_screener.py (Version 1.3 - Ultra Robust IP-Safe Edition)
+# long_term_screener.py (Version 1.4 - IP-Safe Double Defense Edition)
 from __future__ import annotations
 
 from datetime import datetime
@@ -17,19 +17,22 @@ TICKERS_CSV = "tickers.csv"
 OUTPUT_CSV = "long_term_watchlist.csv"
 GC_OUTPUT_CSV = "long_term_gc_watchlist.csv"
 
-# 1回あたりに一括ロードするチャンクサイズ
-DOWNLOAD_CHUNK_SIZE = 400
+# 1回あたりに一括ロードする安全なチャンクサイズ（負荷を平滑化するため200社に縮小）
+DOWNLOAD_CHUNK_SIZE = 200
 # info(財務データ)取得時の、IPブロックを完全に防ぐ安全インターバル待機時間
 SLEEP_SEC = 1.5
 TOP_N_OUTPUT = 50
 TOP_N_GC_OUTPUT = 20
+
+# ★【Version 1.4新設】：yfinance.info のIPブロックを完全に根絶するため、精査する銘柄数を「最大30社」に上限ロック
+MAX_FUNDAMENTALS_精査数 = 30
 
 MIN_TURNOVER = 100_000_000
 MIN_MARKET_CAP = 30_000_000_000
 MIN_REVENUE_GROWTH_PCT = 5.0
 MIN_PROFIT_MARGIN_PCT = 5.0
 MIN_ROE_PCT = 8.0
-MAX_52W_HIGH_GAP_PCT = 10.0        # ★【Version 1.3厳格化】：52週高値から10%以内（ブレイク直前）のみ厳選
+MAX_52W_HIGH_GAP_PCT = 10.0        # 52週高値から10%以内（ブレイク直前の本命株）
 MAX_CHANGE_20D_PCT = 25.0
 MAX_CHANGE_60D_PCT = 80.0
 RECENT_CROSS_LOOKBACK = 10
@@ -66,6 +69,10 @@ def load_all_tickers() -> pd.DataFrame:
 
 
 def download_chunk_histories(tickers: list[str]) -> dict[str, pd.DataFrame]:
+    """
+    【Version 1.4修正】：threads=False を追加。並列リクエスト（DDoS判定）を完全にオフにし、
+    安全に、確実に、1列ずつ一括ダウンロードを行うことでIPブロックを根絶します。
+    """
     full_data = {}
     chunks = [tickers[i:i + DOWNLOAD_CHUNK_SIZE] for i in range(0, len(tickers), DOWNLOAD_CHUNK_SIZE)]
     
@@ -81,7 +88,8 @@ def download_chunk_histories(tickers: list[str]) -> dict[str, pd.DataFrame]:
                 group_by="column", 
                 auto_adjust=False, 
                 actions=True, 
-                progress=False
+                progress=False,
+                threads=False  # 👈 【最重要】：マルチスレッドによるYahooへの同時多発アクセスを禁止します [5]
             )
             
             for t in chunk:
@@ -98,7 +106,7 @@ def download_chunk_histories(tickers: list[str]) -> dict[str, pd.DataFrame]:
         except Exception as e:
             print(f"  [警告] チャンク {idx} の一括ダウンロード中に問題が発生しました: {e}")
             
-        time.sleep(1.0)
+        time.sleep(3.0)  # 👈 【最重要】：チャンク間に長めの安全ウェイトを挟み、Yahooの警戒を解きます
         
     return full_data
 
@@ -353,15 +361,13 @@ def calc_indicators(df: pd.DataFrame) -> pd.DataFrame:
 
 def passes_long_term_filter_technical_only(latest: pd.Series) -> bool:
     """
-    【Version 1.3厳格化】：第1段階（テクニカル一括足切り）用の判定ロジック
-    全上場スキャンを安全に稼働させるため、完全POかつ52週高値から10%以内（ブレイク寸前）に条件を絞り込み、
-    第2段階に進むエリート銘柄を30〜50社前後に徹底して抑え込みます。
+    【Version 1.3/1.4厳選】：第1段階（テクニカル一括足切り）用の判定ロジック
     """
     # 1. 売買代金（最新日）が1億円以上
     if latest["turnover"] < MIN_TURNOVER:
         return False
         
-    # 2. 【Version 1.3厳選】：移動平均線の上向き完全上昇パーフェクトオーダー（PO）が成立していること
+    # 2. 上向き完全上昇パーフェクトオーダー（PO）が成立していること
     # (Close >= 25MA > 75MA > 200MA) ＆ (25MAと75MAが上向き)
     if not (latest["ma25"] > latest["ma75"] > latest["ma200"]):
         return False
@@ -370,7 +376,7 @@ def passes_long_term_filter_technical_only(latest: pd.Series) -> bool:
     if latest["ma25_slope_pct"] <= 0 or latest["ma75_slope_pct"] <= 0:
         return False
         
-    # 3. 【Version 1.3厳選】：52週高値から「10.0%以内」に肉薄していること（ブレイク直前の本命株）
+    # 3. 52週高値から「10.0%以内」に肉薄していること
     if latest["gap_to_52w_high_pct"] > MAX_52W_HIGH_GAP_PCT:
         return False
         
@@ -492,10 +498,26 @@ def run() -> None:
     # ==========================================
     # ★【第2段階】：テクニカル合格株のみ、個別にinfo（財務）を取得して最終足切り ★
     # ==========================================
+    # 【Version 1.4セキュリティ防壁】：
+    # テクニカル合格銘柄が大量に発生した場合に、yf.infoコールのIP制限を100%完全に防ぐため、
+    # 暫定テクニカルスコア（財務抜き）の上位最大30件に足切り・リミッターを設定します。
+    def get_temp_score(item) -> float:
+        _, _, latest, _ = item
+        score = 0.0
+        if latest["Close"] >= latest["ma25"]: score += 2.0
+        if latest["Close"] >= latest["ma75"]: score += 2.5
+        if latest["ma25_slope_pct"] > 0: score += 1.5
+        if latest["ma75_slope_pct"] > 0: score += 1.8
+        return score
+
+    technical_passed.sort(key=get_temp_score, reverse=True)
+    technical_passed_limited = technical_passed[:MAX_FUNDAMENTALS_精査数]
+
+    print(f"➔ [厳選リミッター作動]: 一次合格 {len(technical_passed)} 銘柄から、スコア上位 {len(technical_passed_limited)} 銘柄に精査対象を絞り込みました。")
     print("\n=== [第2段階] テクニカル合格銘柄に対するファンダメンタルズ個別精査を開始します ===")
     
-    for idx, (ticker, hist, latest, latest_date) in enumerate(technical_passed):
-        print(f"  [{idx + 1}/{len(technical_passed)}] 詳細精査中... {ticker}")
+    for idx, (ticker, hist, latest, latest_date) in enumerate(technical_passed_limited):
+        print(f"  [{idx + 1}/{len(technical_passed_limited)}] 詳細精査中... {ticker}")
         
         ticker_obj = None
         try:
@@ -604,6 +626,8 @@ def run() -> None:
                     "industry": fundamentals["industry"],
                 }
             )
+        except Exception as e:
+            print(f"    [精査エラー] {ticker} の検証中に予期せぬエラー: {e}")
         finally:
             close_ticker_session(ticker_obj)
         if (idx + 1) % 25 == 0:
@@ -713,7 +737,7 @@ def run() -> None:
     print(f"GC専用履歴保存完了: {dated_gc_output_path}")
 
     # ==========================================
-    # ★【Version 1.3 修正】：合格者の自動累積台帳（candidate_history.csv）への自動追記 ★
+    # ★【Version 1.3 新規】：合格者の自動累積台帳（candidate_history.csv）への自動追記 ★
     # ==========================================
     if rows:
         history_rows = []
