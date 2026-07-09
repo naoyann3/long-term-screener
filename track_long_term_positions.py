@@ -1,9 +1,13 @@
+# track_long_term_positions.py (Version 1.1 - Spreadsheet Push Integration)
 from __future__ import annotations
 
 from datetime import datetime
+import os
 from pathlib import Path
-
+import time
+import numpy as np
 import pandas as pd
+import requests  # ★【新規追加】：GAS Webhook送信用
 import yfinance as yf
 
 from market_data_utils import adjusted_entry_price, detect_price_data_issue, prepare_price_history, select_latest_completed_row
@@ -12,6 +16,9 @@ from output_format import format_long_term_tracking_output
 TRACKED_TICKERS_CSV = "tracked_tickers.csv"
 OUTPUT_CSV = "long_term_tracking.csv"
 OUTPUT_DIR = "results/long_term_tracking"
+
+# ★【新規追加】：環境変数から暗号鍵を取得
+WEBHOOK_URL = os.environ.get("SPREADSHEET_WEBHOOK_URL")
 
 
 def _base_dir() -> Path:
@@ -211,6 +218,43 @@ def suggested_action(position_type: str, status: str) -> str:
     return actions.get(position_type, actions["scout"]).get(status, "様子見")
 
 
+# ==========================================
+# ★【新規追加】：計算した健康診断データをGAS経由でスプレッドシートに直撃書き込み ★
+# ==========================================
+def log_tracking_to_spreadsheet(rows: list[dict]) -> None:
+    if not WEBHOOK_URL:
+        print("\n📢 [Spreadsheet警告] SPREADSHEET_WEBHOOK_URL が未設定のため、ポートフォリオの自動同期をスキップします。")
+        return
+    if not rows:
+        return
+
+    print(f"\n📢 [Spreadsheet] ポートフォリオの健康診断データをGoogleシートに全自動同期します... (対象: {len(rows)} 件)")
+
+    # JSONで安全に送信するために NaN や None を綺麗にクレンジング
+    sanitized_rows = []
+    for r in rows:
+        sanitized = {}
+        for k, v in r.items():
+            if pd.isna(v) or v is None:
+                sanitized[k] = ""
+            else:
+                sanitized[k] = v
+        sanitized_rows.append(sanitized)
+
+    try:
+        headers = {"Content-Type": "application/json"}
+        # 新しい受信フォーマット「tracking_positions」として送信
+        payload = {"tracking_positions": sanitized_rows}
+        response = requests.post(WEBHOOK_URL, json=payload, headers=headers, timeout=20)
+        
+        if response.status_code == 200:
+            print(f"  ➔ [同期成功] ポートフォリオが1秒で上書き更新されました。")
+        else:
+            print(f"  ➔ [同期失敗] ステータスコード: {response.status_code} / 応答: {response.text}")
+    except Exception as e:
+        print(f"  ➔ [同期エラー] Webhook送信中に例外が発生しました: {e}")
+
+
 def run() -> None:
     ensure_dirs()
     tracked = load_tracked_tickers()
@@ -290,6 +334,9 @@ def run() -> None:
     print(display_df.to_string(index=False))
     print(f"\nTracking CSV saved: {_latest_output_path()}")
     print(f"Tracking history saved: {history_path}")
+
+    # ★【新規追加】：裏側で作成した rows のデータを、スプレッドシートへ自動送信・同期
+    log_tracking_to_spreadsheet(rows)
 
 
 if __name__ == "__main__":
