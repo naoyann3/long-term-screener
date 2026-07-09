@@ -51,6 +51,9 @@ jobs:
           python long_term_screener.py
 
       - name: Run long term tracking
+        env:
+          # 👇 ★【この2行を追加】：トラッキングデータをスプレッドシートへ送信するための暗号鍵
+          SPREADSHEET_WEBHOOK_URL: ${{ secrets.SPREADSHEET_WEBHOOK_URL }}
         run: |
           python track_long_term_positions.py
 
