@@ -13,7 +13,7 @@ st.markdown("""
     h1, h2, h3 { color: #2962ff; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
     div.stButton > button:first-child { background-color: #2962ff; color: white; border-radius: 4px; }
     </style>
-""", unsafe_allow_string=True)
+""", unsafe_allow_html=True) # 👈 ★【修正点】：このように書き換えます
 
 st.title("🚀 Sniper OS - Central Command Dashboard")
 st.caption("毎日21:00に自動更新される、あなたの保有・監視株の一元管理コックピット")
