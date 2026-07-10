@@ -1,4 +1,4 @@
-# track_long_term_positions.py (Version 1.1 - Spreadsheet Push Integration)
+# track_long_term_positions.py (Version 1.2 - Advanced Risk-Reward tracking)
 from __future__ import annotations
 
 from datetime import datetime
@@ -7,7 +7,7 @@ from pathlib import Path
 import time
 import numpy as np
 import pandas as pd
-import requests  # ★【新規追加】：GAS Webhook送信用
+import requests
 import yfinance as yf
 
 from market_data_utils import adjusted_entry_price, detect_price_data_issue, prepare_price_history, select_latest_completed_row
@@ -17,7 +17,6 @@ TRACKED_TICKERS_CSV = "tracked_tickers.csv"
 OUTPUT_CSV = "long_term_tracking.csv"
 OUTPUT_DIR = "results/long_term_tracking"
 
-# ★【新規追加】：環境変数から暗号鍵を取得
 WEBHOOK_URL = os.environ.get("SPREADSHEET_WEBHOOK_URL")
 
 
@@ -145,82 +144,109 @@ def upper_shadow_pct(latest: pd.Series) -> float:
     return max(high - body_top, 0.0) / day_range * 100
 
 
-def judge_status(latest: pd.Series) -> tuple[str, int, list[str]]:
+def judge_status_advanced(latest: pd.Series, entry_price: float | None) -> tuple[str, int, list[str]]:
+    """
+    ③ ＆ ④：【Version 2.3 実戦リスクリワード設計マージ】
+    1. 75日線終値割れ(2日連続) ＆ 取得単価から-12%（MAE極限割れ）で「ロスカット強制撤退」をジャッジ
+    2. 含み益 +15% 到達後の高値から-10%下落、または高値更新に失敗して-10%下落で「トレーリング利確」をジャッジ
+    """
     flags: list[str] = []
     score = 0
+    close_price = float(latest["Close"])
 
-    if latest["close_below_ma75_2d"]:
+    # 1. ロスカット防衛ロジック（75日線2日連続割れ、または-12%強制ロスカット）
+    close_below_75ma_2d = bool(latest["close_below_ma75_2d"])
+    forced_loss_cut = False
+    
+    if entry_price is not None and entry_price > 0:
+        loss_pct = (close_price - entry_price) / entry_price * 100
+        # 取得単価から -12%（MAEの統計的限界下落）を下回ったら強制ロスカット
+        if loss_pct <= -12.0:
+            forced_loss_cut = True
+            flags.append(f"【危険】取得価格から -12% 限界突破 (本日: {loss_pct:+.1f}%)")
+
+    if close_below_75ma_2d:
         score += 4
         flags.append("終値が75日線を2日連続で割れ")
+        
+    if forced_loss_cut:
+        score += 8
+        flags.append("MAE制限：強制ロスカット基準に到達")
 
+    # 2. トレーリング・ストップ利確ロジック
+    # 60日高値（最高値）からの下落率を判定
+    drawdown_from_high = float(latest["drawdown_from_60d_high_pct"])
+    is_trailing_stop = False
+    
+    if entry_price is not None and entry_price > 0:
+        profit_pct = (close_price - entry_price) / entry_price * 100
+        # 途中で15%以上の含み益（MFE到達）があり、かつ高値から-10%以上下落（利益確保）
+        # もしくは、単純に最高値から-10%下落して利益を吐き出しそうになっている場合
+        if profit_pct >= 15.0 and drawdown_from_high <= -10.0:
+            is_trailing_stop = True
+            flags.append(f"【利確】高値から -10% 下落してトレーリング作動")
+
+    if is_trailing_stop:
+        score += 5
+        flags.append("MFE基準：半分利確・トレーリング推奨")
+
+    # その他の補助警戒シグナル
     if latest["ma25_cross_below_75_today"]:
         score += 5
         flags.append("25日線が75日線を再DC")
-
     if latest["Close"] < latest["ma25"]:
         score += 1
         flags.append("終値が25日線割れ")
-
-    if latest["drawdown_from_60d_high_pct"] <= -12:
+    if drawdown_from_high <= -12:
         score += 2
         flags.append("60日高値から大きく下落")
-    elif latest["drawdown_from_60d_high_pct"] <= -8:
-        score += 1
-        flags.append("60日高値から下落")
-
     if latest["change_20d_pct"] < -8:
         score += 1
         flags.append("20日騰落率が悪化")
 
-    high_failure = pd.notna(latest["days_from_20d_high"]) and float(latest["days_from_20d_high"]) >= 5
-    volume_fading = (
-        pd.notna(latest["volume_ratio_20_prev"])
-        and latest["volume_ratio_20"] < latest["volume_ratio_20_prev"]
-        and latest["volume_ratio_20"] < 1.0
-    )
-    long_upper_shadow = upper_shadow_pct(latest) >= 45
-    if high_failure and volume_fading and long_upper_shadow:
-        score += 2
-        flags.append("出来高減少+上ヒゲ+高値更新失敗")
-
-    if latest["ma25"] > latest["ma75"] and latest["Close"] >= latest["ma75"] and score == 0:
-        status = "継続"
-    elif latest["ma25_cross_below_75_today"] or latest["close_below_ma75_2d"]:
+    # 最終ステータス判定
+    if forced_loss_cut or close_below_75ma_2d or latest["ma25_cross_below_75_today"]:
         status = "撤退"
+    elif is_trailing_stop:
+        status = "利確"  # 👈 新設：利確シグナル
     elif score >= 3:
         status = "警戒"
     else:
-        status = "継続(注意)"
+        status = "継続"
+        
     return status, score, flags
 
 
-def suggested_action(position_type: str, status: str) -> str:
+def suggested_action_advanced(position_type: str, status: str) -> str:
+    """
+    推奨アクションに、新設の「利確」を追加
+    """
     actions = {
         "scout": {
             "継続": "少量で継続観察",
             "継続(注意)": "まだ様子見",
             "警戒": "撤退検討",
-            "撤退": "撤退寄り",
+            "利確": "利益確定（全決済）",  # 👈 スプレッドシートに「利確」を指示
+            "撤退": "ロスカット強制撤退",
         },
         "core": {
             "継続": "保有継続",
             "継続(注意)": "買い増し停止",
             "警戒": "縮小・防衛ライン確認",
-            "撤退": "売却候補",
+            "利確": "利益確保（半分利確・残り追跡）",  # 👈 恩株化・25MA割れ追跡指示
+            "撤退": "ロスカット強制撤退",
         },
         "review": {
             "継続": "検証継続",
             "継続(注意)": "検証継続",
             "警戒": "要検証",
-            "撤退": "要検証",
+            "利確": "検証成功（利益）",
+            "撤退": "検証完了（損切り）",
         },
     }
     return actions.get(position_type, actions["scout"]).get(status, "様子見")
 
 
-# ==========================================
-# ★【新規追加】：計算した健康診断データをGAS経由でスプレッドシートに直撃書き込み ★
-# ==========================================
 def log_tracking_to_spreadsheet(rows: list[dict]) -> None:
     if not WEBHOOK_URL:
         print("\n📢 [Spreadsheet警告] SPREADSHEET_WEBHOOK_URL が未設定のため、ポートフォリオの自動同期をスキップします。")
@@ -230,7 +256,6 @@ def log_tracking_to_spreadsheet(rows: list[dict]) -> None:
 
     print(f"\n📢 [Spreadsheet] ポートフォリオの健康診断データをGoogleシートに全自動同期します... (対象: {len(rows)} 件)")
 
-    # JSONで安全に送信するために NaN や None を綺麗にクレンジング
     sanitized_rows = []
     for r in rows:
         sanitized = {}
@@ -243,7 +268,6 @@ def log_tracking_to_spreadsheet(rows: list[dict]) -> None:
 
     try:
         headers = {"Content-Type": "application/json"}
-        # 新しい受信フォーマット「tracking_positions」として送信
         payload = {"tracking_positions": sanitized_rows}
         response = requests.post(WEBHOOK_URL, json=payload, headers=headers, timeout=20)
         
@@ -276,15 +300,18 @@ def run() -> None:
         latest, latest_date = select_latest_completed_row(hist)
         run_date = latest_date if run_date is None else max(run_date, latest_date)
 
-        status, status_score, flags = judge_status(latest)
-        data_issue = detect_price_data_issue(latest, hist)
-        if data_issue:
-            flags.append(data_issue)
-
         try:
             entry_price = float(row["entry_price"]) if str(row["entry_price"]).strip() else None
         except Exception:
             entry_price = None
+
+        # 3. ＆ 4. の有意差ルールをマージした「高度な健康診断判定」の実行
+        status, status_score, flags = judge_status_advanced(latest, entry_price)
+        
+        data_issue = detect_price_data_issue(latest, hist)
+        if data_issue:
+            flags.append(data_issue)
+
         adjusted_entry = adjusted_entry_price(entry_price, str(row["entry_date"]).strip(), hist, latest)
 
         rows.append(
@@ -310,7 +337,7 @@ def run() -> None:
                 "upper_shadow_pct": round(upper_shadow_pct(latest), 3),
                 "status": status,
                 "status_score": status_score,
-                "suggested_action": suggested_action(row["position_type"], status),
+                "suggested_action": suggested_action_advanced(row["position_type"], status),
                 "data_issue": data_issue,
                 "warning_flags": " / ".join(flags),
                 "note": row["note"],
@@ -335,7 +362,7 @@ def run() -> None:
     print(f"\nTracking CSV saved: {_latest_output_path()}")
     print(f"Tracking history saved: {history_path}")
 
-    # ★【新規追加】：裏側で作成した rows のデータを、スプレッドシートへ自動送信・同期
+    # スプレッドシートへ自動送信
     log_tracking_to_spreadsheet(rows)
 
 
