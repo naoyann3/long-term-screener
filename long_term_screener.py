@@ -1,8 +1,9 @@
-# long_term_screener.py (Version 2.3 - Enterprise Elite Edition)
+# long_term_screener.py (Version 2.4 - Sector Momentum Edition)
 from __future__ import annotations
 
 from datetime import datetime
 import gc
+import json
 from pathlib import Path
 import time
 import numpy as np
@@ -22,14 +23,10 @@ SLEEP_SEC = 1.5
 TOP_N_OUTPUT = 50
 TOP_N_GC_OUTPUT = 20
 
-# yfinance.info のIPブロックを防ぐ、精査最大ロック数
 MAX_FUNDAMENTALS_精査数 = 30
 
 MIN_TURNOVER = 100_000_000
-
-# ★【Version 2.3 期待値極大化】：中小型ノイズを排除し、勝率を 62.6% へ押し上げるため1,000億円（100.0十億円）以上に厳格化
-MIN_MARKET_CAP = 100_000_000_000
-
+MIN_MARKET_CAP = 100_000_000_000  # ★【Version 2.3】：時価総額1,000億円（エリート厳選）
 MIN_REVENUE_GROWTH_PCT = 5.0
 MIN_PROFIT_MARGIN_PCT = 5.0
 MIN_ROE_PCT = 8.0
@@ -43,6 +40,13 @@ REVERSAL_LOOKBACK = 10
 GC_MIN_MA25_SLOPE_PCT = 0.25
 GC_MIN_MA75_SLOPE_PCT = 0.25
 
+FUND_DIR = Path(__file__).resolve().parent / "results" / "data_cache" / "fundamentals" # 安全用
+if not FUND_DIR.exists():
+    FUND_DIR = Path(__file__).resolve().parent / "data_cache" / "fundamentals"
+    if not FUND_DIR.exists():
+        # 初動検知の data_cache から直接参照するためのフォールバック自動解決
+        FUND_DIR = Path(__file__).resolve().parent.parent / "big_winner_research_results" / "data_cache" / "fundamentals"
+
 
 def _ticker_path() -> Path:
     return Path(__file__).resolve().parent / TICKERS_CSV
@@ -53,7 +57,7 @@ def _latest_output_path() -> Path:
 
 
 def _latest_gc_output_path() -> Path:
-    return Path(__file__).resolve().parent / GC_OUTPUT_CSV
+    return Path(__file__).resolve().parent / _latest_output_path().name.replace("watchlist", "gc_watchlist")
 
 
 def _gc_watchlists_dir() -> Path:
@@ -458,6 +462,22 @@ def run() -> None:
     
     tickers_df = load_all_tickers()
     all_tickers = tickers_df["ticker"].dropna().tolist()
+    
+    # ★【Version 2.4追加】：セクター（TOPIX11セクター）のモメンタム自動逆算 ➔ 加点マトリクスの構築
+    # 1. 銘柄ごとの所属セクターマッピングを事前に作成（メモリ上にキャッシュロード）
+    sector_map = {}
+    for t in all_tickers:
+        fund_path = FUND_DIR / f"{t}.json"
+        if fund_path.exists():
+            try:
+                with open(fund_path, "r", encoding="utf-8") as f:
+                    fund_data = json.load(f)
+                    sector_map[t] = fund_data.get("sector", "不明")
+            except Exception:
+                sector_map[t] = "不明"
+        else:
+            sector_map[t] = "不明"
+            
     name_map = dict(zip(tickers_df["ticker"], tickers_df["name"]))
 
     rows: list[dict] = []
@@ -471,12 +491,52 @@ def run() -> None:
     # ==========================================
     all_histories, delisted_list = download_chunk_histories(all_tickers)
     
-    # 💡 【Version 1.5新設：宇宙の自己クリーニングロジック】
     if delisted_list:
         print(f"\n📢 [自己クリーニング] yfinanceでロードできなかった {len(delisted_list)} 銘柄を検知しました。上場廃止・ティッカー変更とみなしてtickers.csvから自動削除します。")
         cleaned_tickers_df = tickers_df[~tickers_df["ticker"].isin(delisted_list)]
         cleaned_tickers_df.to_csv(_ticker_path(), index=False, encoding="utf-8-sig")
         print("  ➔ tickers.csv の自己クリーニング・浄化処理が完了しました。")
+
+    # 💡 【Version 2.4追加】：全合格キャッシュを用いて「各セクターの過去40日のモメンタム」を自動集計・5段階星評価
+    sector_performances = {}
+    for t, hist in all_histories.items():
+        s = sector_map.get(t, "不明")
+        if s == "不明" or len(hist) < 40:
+            continue
+        try:
+            # 直近40日（約2ヶ月）の平均騰落率
+            pct_40d = (hist["Close"].iloc[-1] - hist["Close"].iloc[-40]) / hist["Close"].iloc[-40] * 100
+            if s not in sector_performances:
+                sector_performances[s] = []
+            sector_performances[s].append(pct_40d)
+        except Exception:
+            continue
+
+    sector_avg_mom = {}
+    for s, p_list in sector_performances.items():
+        sector_avg_mom[s] = np.mean(p_list) if p_list else 0.0
+
+    # 5段階評価の係数マッピング
+    sector_meta = {}
+    print("\n=== [Version 2.4] 本日のセクターモメンタムを全自動集計しました ===")
+    for s, val in sorted(sector_avg_mom.items(), key=lambda x: x[1], reverse=True):
+        if val >= 10.0:
+            stars = "★★★★★"
+            coeff = 1.20
+        elif val >= 5.0:
+            stars = "★★★★☆"
+            coeff = 1.10
+        elif val >= -2.0:
+            stars = "★★★☆☆"
+            coeff = 1.00
+        elif val >= -8.0:
+            stars = "★★☆☆"
+            coeff = 0.90
+        else:
+            stars = "★☆☆☆☆"
+            coeff = 0.80
+        sector_meta[s] = {"stars": stars, "coeff": coeff, "avg_return": val}
+        print(f"  ・📁 {s:25s} ➔ 40日平均: {val:+6.2f}% ｜ 評価: {stars} (セクター係数: {coeff:.2f})")
 
     technical_passed = []
 
@@ -499,9 +559,6 @@ def run() -> None:
 
     print(f"➔ [一次フィルター合格]: {len(technical_passed)} 銘柄 / 有効 {len(all_histories)} 銘柄中")
 
-    # ==========================================
-    # ★【第2段階】：テクニカル合格株のみ、個別にinfo（財務）を取得して最終足切り ★
-    # ==========================================
     def get_temp_score(item) -> float:
         _, _, latest, _ = item
         score = 0.0
@@ -529,10 +586,8 @@ def run() -> None:
                 time.sleep(SLEEP_SEC)
                 continue
 
-            # 💡 【Version 2.3 有意差大マージ（地雷セクターのハードブロック）】
-            # 不動産 (Real Estate)、医療 (Healthcare) などの地合い逆風セクターは、
-            # 勝率0%〜35%の死に損リスクを回避するため、問答無用で自動排除します！ [lt_v1_v2.3_sector_block]
-            current_sector = fundamentals.get("sector")
+            # 【地雷セクター完全除外（ハードブロック）】
+            current_sector = fundamentals.get("sector", "不明")
             if current_sector in ["Real Estate", "Healthcare"]:
                 print(f"    ➔ ❌ [地雷セクター完全除外] {ticker} は不人気セクター（{current_sector}）のため、自動足切りしました。")
                 time.sleep(SLEEP_SEC)
@@ -561,6 +616,21 @@ def run() -> None:
             screen_date = latest_date if screen_date is None else max(screen_date, latest_date)
             score, trend_score, quality_score, strength_score = score_row(latest, fundamentals)
 
+            # === 💡 【Version 2.4追加】：セクター係数と相対強度（Relative Strength）の算出 ===
+            s_info = sector_meta.get(current_sector, {"stars": "★★★☆☆", "coeff": 1.0, "avg_return": 0.0})
+            sector_stars = s_info["stars"]
+            sector_coeff = s_info["coeff"]
+            
+            # 個別銘柄の40日騰落率の計算
+            close_orig_40 = float(hist["Close"].iloc[-40]) if len(hist) >= 40 else float(hist["Close"].iloc[0])
+            stock_return_40d = (latest["Close"] - close_orig_40) / close_orig_40 * 100
+            
+            # 相対強度（Relative Strength = 個別騰落率 - セクター平均）
+            relative_strength = round(stock_return_40d - s_info["avg_return"], 2)
+            
+            # 最終総合スコア = 企業スコア * セクター係数 (②：セクター補正の導入)
+            final_score = round(score * sector_coeff, 2)
+
             rows.append(
                 {
                     "run_date": latest_date.isoformat(),
@@ -568,7 +638,7 @@ def run() -> None:
                     "generated_at": generated_at,
                     "ticker": ticker,
                     "name": name_map.get(ticker, ticker),
-                    "score": score,
+                    "score": final_score,         # ★ 補正された最終スコアを代入
                     "trend_score": trend_score,
                     "quality_score": quality_score,
                     "strength_score": strength_score,
@@ -632,8 +702,12 @@ def run() -> None:
                     "initial_trend_signal": bool(latest["initial_trend_signal"]),
                     "early_reversal_setup": bool(latest["early_reversal_setup"]),
                     "reversal_from_bearish_po": bool(latest["reversal_from_bearish_po"]),
-                    "sector": fundamentals["sector"],
+                    "sector": current_sector,
                     "industry": fundamentals["industry"],
+                    
+                    # ★【Version 2.4追加】：セクター統計メタデータ
+                    "sector_stars": sector_stars,
+                    "relative_strength": relative_strength
                 }
             )
         except Exception as e:
@@ -651,6 +725,8 @@ def run() -> None:
 
     df = df.sort_values(["score", "quality_score", "trend_score"], ascending=False).reset_index(drop=True)
     df["rank"] = df.index + 1
+    
+    # 既存のカラム構成
     output_df = df[
         [
             "run_date", "screen_version", "generated_at", "rank", "ticker", "name",
@@ -675,7 +751,7 @@ def run() -> None:
             "ma25_cross_200_recent_tight", "ma75_cross_200_recent_tight",
             "perfect_order_recent", "perfect_order_today", "perfect_order_recent_tight",
             "initial_trend_signal", "early_reversal_setup", "reversal_from_bearish_po",
-            "sector", "industry",
+            "sector", "industry", "sector_stars", "relative_strength" # 追加
         ]
     ].head(TOP_N_OUTPUT)
     
