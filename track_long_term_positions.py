@@ -1,4 +1,4 @@
-# track_long_term_positions.py (Version 1.2 - Advanced Risk-Reward tracking)
+# track_long_term_positions.py (Version 1.3 - MFE & Trailing Complete)
 from __future__ import annotations
 
 from datetime import datetime
@@ -16,6 +16,12 @@ from output_format import format_long_term_tracking_output
 TRACKED_TICKERS_CSV = "tracked_tickers.csv"
 OUTPUT_CSV = "long_term_tracking.csv"
 OUTPUT_DIR = "results/long_term_tracking"
+
+# 利益保護・トレーリング用の定義パラメータ（定数：Version 2.3）
+PROTECTION_TRIGGER_PCT = 10.0      # 建値プロテクションを有効にするトリガー最高利益率（％）
+PROTECTION_STOP_LIMIT_PCT = 1.0    # プロテクション発動時の、取得価格比のストップロスライン（％）
+TRAILING_TRIGGER_PCT = 15.0        # トレーリング利確を有効にするトリガー最高利益率（％）
+TRAILING_GIVEBACK_PCT = 5.0        # トレーリング発動時の、最高値からの最大押し戻し許容率（％）
 
 WEBHOOK_URL = os.environ.get("SPREADSHEET_WEBHOOK_URL")
 
@@ -144,96 +150,125 @@ def upper_shadow_pct(latest: pd.Series) -> float:
     return max(high - body_top, 0.0) / day_range * 100
 
 
-def judge_status_advanced(latest: pd.Series, entry_price: float | None) -> tuple[str, int, list[str]]:
+def judge_status_advanced(latest: pd.Series, entry_price: float | None, mfe_pct: float) -> tuple[str, int, list[str]]:
     """
-    ③ ＆ ④：【Version 2.3 実戦リスクリワード設計マージ】
-    1. 75日線終値割れ(2日連続) ＆ 取得単価から-12%（MAE極限割れ）で「ロスカット強制撤退」をジャッジ
-    2. 含み益 +15% 到達後の高値から-10%下落、または高値更新に失敗して-10%下落で「トレーリング利確」をジャッジ
+    ④：【重要：5大防衛・利確の優先順位ロジックを完全実装】
+    1. 【最優先】MAE損切り（取得価格比 -12%以下）➔ 撤退（ロスカット）
+    2. 【第2優先】MFEトレーリング利確（最高益15%超からの5%押し戻し）➔ 利確（トレーリング）
+    3. 【第3優先】建値プロテクション（最高益10%超からの買値+1%以下反落）➔ 撤退（同値）
+    4. 【第4優先】既存の75日線2日連続割れ / 25日・75日再デッドクロス ➔ 撤退（ロスカット）
+    5. 【通常】上記以外 ➔ 継続・警戒
     """
     flags: list[str] = []
     score = 0
     close_price = float(latest["Close"])
+    drawdown_from_high = float(latest["drawdown_from_60d_high_pct"])
 
-    # 1. ロスカット防衛ロジック（75日線2日連続割れ、または-12%強制ロスカット）
-    close_below_75ma_2d = bool(latest["close_below_ma75_2d"])
+    # 1. 【最優先】MAE損切り判定（取得単価から -12.0% 以下）
     forced_loss_cut = False
-    
     if entry_price is not None and entry_price > 0:
         loss_pct = (close_price - entry_price) / entry_price * 100
-        # 取得単価から -12%（MAEの統計的限界下落）を下回ったら強制ロスカット
         if loss_pct <= -12.0:
             forced_loss_cut = True
-            flags.append(f"【危険】取得価格から -12% 限界突破 (本日: {loss_pct:+.1f}%)")
 
-    if close_below_75ma_2d:
-        score += 4
-        flags.append("終値が75日線を2日連続で割れ")
-        
-    if forced_loss_cut:
-        score += 8
-        flags.append("MAE制限：強制ロスカット基準に到達")
-
-    # 2. トレーリング・ストップ利確ロジック
-    # 60日高値（最高値）からの下落率を判定
-    drawdown_from_high = float(latest["drawdown_from_60d_high_pct"])
+    # 2. 【第2優先】MFEトレーリング利確判定（最高益が15%以上に達したことがあり、最高値から5%以上押し戻されている場合）
     is_trailing_stop = False
-    
-    if entry_price is not None and entry_price > 0:
-        profit_pct = (close_price - entry_price) / entry_price * 100
-        # 途中で15%以上の含み益（MFE到達）があり、かつ高値から-10%以上下落（利益確保）
-        # もしくは、単純に最高値から-10%下落して利益を吐き出しそうになっている場合
-        if profit_pct >= 15.0 and drawdown_from_high <= -10.0:
+    if entry_price is not None and entry_price > 0 and mfe_pct >= TRAILING_TRIGGER_PCT:
+        # 最高値（MFE換算）の算出
+        max_close_val = entry_price * (1 + mfe_pct / 100.0)
+        # 現在値が、その最高値から-5%（TRAILING_GIVEBACK_PCT）以上押し戻されたかを逆算
+        giveback = (close_price - max_close_val) / max_close_val * 100
+        if giveback <= -TRAILING_GIVEBACK_PCT:
             is_trailing_stop = True
-            flags.append(f"【利確】高値から -10% 下落してトレーリング作動")
 
-    if is_trailing_stop:
-        score += 5
-        flags.append("MFE基準：半分利確・トレーリング推奨")
+    # 3. 【第3優先】建値プロテクション判定（最高益が10%以上に達したことがあり、現在の含み損益が+1.0%以下まで反落した場合）
+    is_protection_stop = False
+    if entry_price is not None and entry_price > 0 and mfe_pct >= PROTECTION_TRIGGER_PCT:
+        current_profit_pct = (close_price - entry_price) / entry_price * 100
+        if current_profit_pct <= PROTECTION_STOP_LIMIT_PCT:
+            is_protection_stop = True
 
-    # その他の補助警戒シグナル
-    if latest["ma25_cross_below_75_today"]:
-        score += 5
-        flags.append("25日線が75日線を再DC")
-    if latest["Close"] < latest["ma25"]:
-        score += 1
-        flags.append("終値が25日線割れ")
-    if drawdown_from_high <= -12:
-        score += 2
-        flags.append("60日高値から大きく下落")
-    if latest["change_20d_pct"] < -8:
-        score += 1
-        flags.append("20日騰落率が悪化")
+    # 4. 【第4優先】既存の移動平均線崩壊シグナル
+    close_below_75ma_2d = bool(latest["close_below_ma75_2d"])
+    ma25_cross_below_75 = bool(latest["ma25_cross_below_75_today"])
 
-    # 最終ステータス判定
-    if forced_loss_cut or close_below_75ma_2d or latest["ma25_cross_below_75_today"]:
+    # --- 規律に基づいた優先順位別の条件分岐ジャッジ ---
+    if forced_loss_cut:
         status = "撤退"
-    elif is_trailing_stop:
-        status = "利確"  # 👈 新設：利確シグナル
-    elif score >= 3:
-        status = "警戒"
-    else:
-        status = "継続"
+        score += 8
+        flags.append(f"【危険】取得価格から -12% 限界突破 (本日: {(close_price - entry_price) / entry_price * 100:+.1f}%)")
+        flags.append("MAE制限：強制ロスカット基準に到達")
         
+    elif is_trailing_stop:
+        status = "利確"  # 👈 新設された「利確」ステータス
+        score += 5
+        flags.append(f"【利益確定】MFE(最高益)+{mfe_pct:.1f}%から -{TRAILING_GIVEBACK_PCT:.1f}%押戻し（トレーリング利確発動）")
+        
+    elif is_protection_stop:
+        status = "撤退"
+        score += 3
+        flags.append(f"【利益保護】最高益+{mfe_pct:.1f}%到達後の買値付近反落（同値撤退発動）")
+        
+    elif close_below_75ma_2d or ma25_cross_below_75:
+        status = "撤退"
+        if close_below_75ma_2d:
+            score += 4
+            flags.append("終値が75日線を2日連続で割れ")
+        if ma25_cross_below_75:
+            score += 5
+            flags.append("25日線が75日線を再DC")
+            
+    else:
+        # 5. 【通常】上記に該当しない場合は、スコアリング警戒システムにバトンを渡します
+        if latest["Close"] < latest["ma25"]:
+            score += 1
+            flags.append("終値が25日線割れ")
+        if drawdown_from_high <= -12:
+            score += 2
+            flags.append("60日高値から大きく下落")
+        elif drawdown_from_high <= -8:
+            score += 1
+            flags.append("60日高値から下落")
+        if latest["change_20d_pct"] < -8:
+            score += 1
+            flags.append("20日騰落率が悪化")
+
+        if score >= 3:
+            status = "警戒"
+        else:
+            status = "継続"
+
     return status, score, flags
 
 
-def suggested_action_advanced(position_type: str, status: str) -> str:
+def suggested_action_advanced(position_type: str, status: str, flags: list[str]) -> str:
     """
-    推奨アクションに、新設の「利確」を追加
+    利確・建値撤退に適合した、より具体的な推奨アクションテキストを動的出力します
     """
+    flag_str = "".join(flags)
+    
+    # 警告サインのテキスト内容から、アクションを直接動的に仕分け
+    if "利益確定" in flag_str:
+        if position_type == "core":
+            return "利益確保（半分利確・残り追跡）"
+        return "トレーリング利確（利益確定）"
+        
+    if "利益保護" in flag_str:
+        return "建値撤退（利益保護）"
+
     actions = {
         "scout": {
             "継続": "少量で継続観察",
             "継続(注意)": "まだ様子見",
             "警戒": "撤退検討",
-            "利確": "利益確定（全決済）",  # 👈 スプレッドシートに「利確」を指示
+            "利確": "トレーリング利確（利益確定）",
             "撤退": "ロスカット強制撤退",
         },
         "core": {
             "継続": "保有継続",
             "継続(注意)": "買い増し停止",
             "警戒": "縮小・防衛ライン確認",
-            "利確": "利益確保（半分利確・残り追跡）",  # 👈 恩株化・25MA割れ追跡指示
+            "利確": "利益確保（半分利確・残り追跡）",
             "撤退": "ロスカット強制撤退",
         },
         "review": {
@@ -305,14 +340,29 @@ def run() -> None:
         except Exception:
             entry_price = None
 
-        # 3. ＆ 4. の有意差ルールをマージした「高度な健康診断判定」の実行
-        status, status_score, flags = judge_status_advanced(latest, entry_price)
+        adjusted_entry = adjusted_entry_price(entry_price, str(row["entry_date"]).strip(), hist, latest)
+
+        # === 1. 【MFE（最高含み益率）】の自動逆算追跡ロジックの埋め込み ===
+        mfe_pct = 0.0
+        if adjusted_entry and str(row["entry_date"]).strip():
+            entry_day_str = str(row["entry_date"]).strip()
+            # 日付比較のためにインデックスをクレンジング
+            hist_normalized = hist.copy()
+            hist_normalized.index = hist_normalized.index.strftime("%Y-%m-%d")
+            
+            # 取得日以降の未来データのみをスキャン
+            future_hist = hist_normalized.loc[hist_normalized.index >= entry_day_str]
+            if not future_hist.empty:
+                max_close = future_hist["Close"].max()
+                # 取得単価からの最高利益率（MFE%）を算出
+                mfe_pct = (max_close - adjusted_entry) / adjusted_entry * 100
+
+        # === 2. 高度な5段階優先順位ジャッジ（Version 2.3）の実行 ===
+        status, status_score, flags = judge_status_advanced(latest, entry_price, mfe_pct)
         
         data_issue = detect_price_data_issue(latest, hist)
         if data_issue:
             flags.append(data_issue)
-
-        adjusted_entry = adjusted_entry_price(entry_price, str(row["entry_date"]).strip(), hist, latest)
 
         rows.append(
             {
@@ -337,7 +387,7 @@ def run() -> None:
                 "upper_shadow_pct": round(upper_shadow_pct(latest), 3),
                 "status": status,
                 "status_score": status_score,
-                "suggested_action": suggested_action_advanced(row["position_type"], status),
+                "suggested_action": suggested_action_advanced(row["position_type"], status, flags),
                 "data_issue": data_issue,
                 "warning_flags": " / ".join(flags),
                 "note": row["note"],
@@ -362,7 +412,7 @@ def run() -> None:
     print(f"\nTracking CSV saved: {_latest_output_path()}")
     print(f"Tracking history saved: {history_path}")
 
-    # スプレッドシートへ自動送信
+    # スプレッドシートへ自動送信（※GAS側は修正不要のまま、判定「利確」「建値撤退」をそのまま上書きセル転記します）
     log_tracking_to_spreadsheet(rows)
 
 
