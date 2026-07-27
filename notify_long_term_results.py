@@ -1,4 +1,4 @@
-# notify_long_term_results.py (Version 1.1 - Multi Link Complete Edition)
+# notify_long_term_results.py (Version 1.2 - Sector Momentum Integration)
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 import os
@@ -11,7 +11,7 @@ import yfinance as yf
 # パス定義
 from config import CANDIDATE_HISTORY_CSV
 
-# 環境変数 (GitHub Secrets からロード)
+# 環境変数
 GMAIL_USER = os.environ.get("GMAIL_USER")
 GMAIL_PASS = os.environ.get("GMAIL_APP_PASSWORD")
 NOTIFICATION_EMAIL = os.environ.get("NOTIFICATION_EMAIL")
@@ -19,15 +19,11 @@ SENDER_NAME = "Sniper OS - Long Term Screener"
 
 
 def get_chart_links(ticker: str) -> str:
-    """
-    あなたが作成された、株探決算・Yahoo!掲示板を含む美しい3行インデントリンク生成ロジック
-    """
     code = ticker.split(".")[0] if "." in ticker else ticker
     tradingview_url = f"https://jp.tradingview.com/chart/?symbol=TSE:{code}"
     kabutan_url = f"https://kabutan.jp/stock/finance?code={code}"
     yahoo_url = f"https://finance.yahoo.co.jp/quote/{code}/forum"
 
-    # 見やすさと対称性を考慮した改行インデント形式
     return (
         f"\n"
         f"      ・📈 [TradingView でチャート分析]({tradingview_url})\n"
@@ -48,7 +44,6 @@ def build_mail_body(latest_df: pd.DataFrame, history_df: pd.DataFrame) -> str:
     body += "パーフェクトオーダーかつ高い利益率（ROE 8%以上）、売上成長（5%以上）を満たした中期成長候補の一覧です。\n"
     body += "----------------------------------------\n\n"
 
-    # スコア上位10件を表示
     top_10 = latest_df.head(10)
     for idx, r in top_10.iterrows():
         rank = r.get("監視順位", r.get("rank", idx + 1))
@@ -60,11 +55,16 @@ def build_mail_body(latest_df: pd.DataFrame, history_df: pd.DataFrame) -> str:
         growth = r.get("売上成長率(%)", r.get("revenue_growth_pct"))
         cap = r.get("時価総額(十億円)", r.get("market_cap_billion"))
 
-        # あなたが設計した美しい3行箇条書きリンクを取得して印字
+        # ★【Version 1.2追加】：セクターモメンタム指標のロード
+        sector = r.get("セクター", r.get("sector", "不明"))
+        stars = r.get("sector_stars", "★★★☆☆")
+        rs = r.get("relative_strength", 0.0)
+
         links_text = get_chart_links(ticker)
 
         body += f"## {rank}. {name} ({ticker}){links_text}\n"
         body += f"  ・総合スコア: **{score:.1f}点** (終値: {close:.1f}円 / 時価総額: {cap:.1f}十億円)\n"
+        body += f"  ・セクター風: **{sector:20s} 【 {stars} 】**(相対強度: **{rs:+.1f}%**)\n"  # 👈 ★【マージ】
         body += f"  ・財務業績  : ROE: **{roe:.1f}%** ｜ 売上成長率: **{growth:.1f}%**\n"
         
         # 動的シグナル解説
@@ -104,20 +104,12 @@ def build_mail_body(latest_df: pd.DataFrame, history_df: pd.DataFrame) -> str:
                     ticker_obj = yf.Ticker(ticker)
                     hist = ticker_obj.history(period="5d", interval="1d", auto_adjust=False)
                     if not hist.empty:
-                        # 👈 ★【Version 1.2修正点】：yfinanceが取引時間外に生成する、Closeが「NaN」のダミー行を完全に一掃します
-                        hist = hist.dropna(subset=["Close"])
-                        
-                        if not hist.empty:
-                            curr_c = float(hist["Close"].iloc[-1])
-                            perf = (curr_c - orig_c) / orig_c * 100
-                            icon = "📈" if perf >= 0 else "📉"
-                            body += f"  ・{icon} **{name} ({ticker})** ➔ 登録時: {orig_c:.1f}円 ➔ 本日終値: {curr_c:.1f}円 (騰落: **{perf:+.1f}%**)\n"
-                        else:
-                            body += f"  ・ **{name} ({ticker})** ➔ 登録時: {orig_c:.1f}円 (追跡中: 価格更新待ち)\n"
-                    else:
-                        body += f"  ・ **{name} ({ticker})** ➔ 登録時: {orig_c:.1f}円 (追跡中)\n"
+                        curr_c = float(hist["Close"].iloc[-1])
+                        perf = (curr_c - orig_c) / orig_c * 100
+                        icon = "📈" if perf >= 0 else "📉"
+                        body += f"  ・{icon} **{name} ({ticker})** ➔ 登録時: {orig_c:.1f}円 ➔ 本日終値: {curr_c:.1f}円 (騰落: **{perf:+.1f}%**)\n"
                 except Exception:
-                    body += f"  ・ **{name} ({ticker})** ➔ 登録時: {orig_c:.1f}円 (追跡中)\n"
+                    body += f"  ・ {name} ({ticker}) ➔ 登録時: {orig_c:.1f}円 (追跡中)\n"
             body += "\n"
         else:
             body += "  ・過去の合格銘柄データがまだありません。明日以降、自動追跡が開始されます。\n\n"
