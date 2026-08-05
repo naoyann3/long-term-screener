@@ -1,4 +1,4 @@
-# long_term_screener.py (Version 2.4 - Sector Momentum Edition)
+# long_term_screener.py (Version 2.5 - Forgotten & Waiting Watchlist Complete)
 from __future__ import annotations
 
 from datetime import datetime
@@ -23,10 +23,11 @@ SLEEP_SEC = 1.5
 TOP_N_OUTPUT = 50
 TOP_N_GC_OUTPUT = 20
 
+# yfinance.info のIPブロックを防ぐ、精査最大ロック数
 MAX_FUNDAMENTALS_精査数 = 30
 
 MIN_TURNOVER = 100_000_000
-MIN_MARKET_CAP = 100_000_000_000  # ★【Version 2.3】：時価総額1,000億円（エリート厳選）
+MIN_MARKET_CAP = 100_000_000_000  # 時価総額1,000億円（エリート厳選）
 MIN_REVENUE_GROWTH_PCT = 5.0
 MIN_PROFIT_MARGIN_PCT = 5.0
 MIN_ROE_PCT = 8.0
@@ -40,11 +41,10 @@ REVERSAL_LOOKBACK = 10
 GC_MIN_MA25_SLOPE_PCT = 0.25
 GC_MIN_MA75_SLOPE_PCT = 0.25
 
-FUND_DIR = Path(__file__).resolve().parent / "results" / "data_cache" / "fundamentals" # 安全用
+FUND_DIR = Path(__file__).resolve().parent / "results" / "data_cache" / "fundamentals"
 if not FUND_DIR.exists():
     FUND_DIR = Path(__file__).resolve().parent / "data_cache" / "fundamentals"
     if not FUND_DIR.exists():
-        # 初動検知の data_cache から直接参照するためのフォールバック自動解決
         FUND_DIR = Path(__file__).resolve().parent.parent / "big_winner_research_results" / "data_cache" / "fundamentals"
 
 
@@ -367,6 +367,54 @@ def calc_indicators(df: pd.DataFrame) -> pd.DataFrame:
         & (df["drawdown_from_60d_high_pct"] > -15)
         & (df["stealth_accumulation_score"] >= 5.5)
     )
+
+    # ─── 💡 【Version 2.5新設：Grok/ChatGPT要求の『Forgotten Score（忘却スコア）』＆『半値八掛け二割引』を完全実装】 ───
+    # A. 出来高の長期的トレンドの測定
+    df["vol_avg60"] = df["Volume"].rolling(60).mean()
+    df["vol_avg20_vs_60_ratio"] = df["vol_avg20"] / df["vol_avg60"]
+    
+    # B. 15営業日のヨコヨコレンジ
+    df["high_15"] = df["High"].rolling(15).max()
+    df["low_15"] = df["Low"].rolling(15).min()
+    df["range_15_pct"] = (df["high_15"] - df["low_15"]) / df["Close"] * 100
+    
+    # C. 【半値八掛け二割引（格言：高値から64〜68%以上の大暴落）】の定量化 (③)
+    df["drawdown_from_52w_high_pct"] = (df["Close"] - df["recent_high_252"]) / df["recent_high_252"] * 100
+    df["deep_value_setup"] = df["drawdown_from_52w_high_pct"] <= -64.0
+
+    # D. 【Forgotten Score (売り枯れ・無関心度：100点満点)】の動的算出 (② & ④)
+    forgotten_scores = []
+    for idx, row in df.iterrows():
+        f_score = 0
+        
+        # 1. 出来高枯渇度（最大40点）
+        # 20日出来高比率が 0.5倍以下（完全な売り枯れ：+20点）
+        if row["volume_ratio_20"] <= 0.50:
+            f_score += 20
+        # 中長期的な関心の枯渇（20日平均が60日平均の 0.6倍以下：+20点）
+        if row["vol_avg20_vs_60_ratio"] <= 0.60:
+            f_score += 20
+            
+        # 2. ボラティリティの超緊縮（最大30点）
+        # BB幅 5.0%以下の極限スクイーズ（+30点） ｜ 8.0%以下のスクイーズ（+15点）
+        if row["bb_width"] <= 5.0:
+            f_score += 30
+        elif row["bb_width"] <= 8.0:
+            f_score += 15
+            
+        # 3. 価格のヨコヨコ安定性（最大20点）
+        # 15営業日の高低変動幅が 5%以内の完全膠着（+20点）
+        if row["range_15_pct"] <= 5.0:
+            f_score += 20
+            
+        # 4. RSIの完全中立適正圏（最大10点）
+        # RSI14が 40%〜55% の中立ゾーン（+10点）
+        if 40.0 <= row["rsi14"] <= 55.0:
+            f_score += 10
+            
+        forgotten_scores.append(f_score)
+        
+    df["forgotten_score"] = forgotten_scores
     return df
 
 
@@ -463,8 +511,7 @@ def run() -> None:
     tickers_df = load_all_tickers()
     all_tickers = tickers_df["ticker"].dropna().tolist()
     
-    # ★【Version 2.4追加】：セクター（TOPIX11セクター）のモメンタム自動逆算 ➔ 加点マトリクスの構築
-    # 1. 銘柄ごとの所属セクターマッピングを事前に作成（メモリ上にキャッシュロード）
+    # 銘柄ごとのセクターマッピングを事前に作成（メモリ上にロード）
     sector_map = {}
     for t in all_tickers:
         fund_path = FUND_DIR / f"{t}.json"
@@ -497,14 +544,13 @@ def run() -> None:
         cleaned_tickers_df.to_csv(_ticker_path(), index=False, encoding="utf-8-sig")
         print("  ➔ tickers.csv の自己クリーニング・浄化処理が完了しました。")
 
-    # 💡 【Version 2.4追加】：全合格キャッシュを用いて「各セクターの過去40日のモメンタム」を自動集計・5段階星評価
+    # 全合格キャッシュを用いて「各セクターの過去40日のモメンタム」を自動集計・5段階星評価
     sector_performances = {}
     for t, hist in all_histories.items():
         s = sector_map.get(t, "不明")
         if s == "不明" or len(hist) < 40:
             continue
         try:
-            # 直近40日（約2ヶ月）の平均騰落率
             pct_40d = (hist["Close"].iloc[-1] - hist["Close"].iloc[-40]) / hist["Close"].iloc[-40] * 100
             if s not in sector_performances:
                 sector_performances[s] = []
@@ -516,9 +562,8 @@ def run() -> None:
     for s, p_list in sector_performances.items():
         sector_avg_mom[s] = np.mean(p_list) if p_list else 0.0
 
-    # 5段階評価の係数マッピング
     sector_meta = {}
-    print("\n=== [Version 2.4] 本日のセクターモメンタムを全自動集計しました ===")
+    print("\n=== [Version 2.5] 本日のセクターモメンタムを全自動集計しました ===")
     for s, val in sorted(sector_avg_mom.items(), key=lambda x: x[1], reverse=True):
         if val >= 10.0:
             stars = "★★★★★"
@@ -530,7 +575,7 @@ def run() -> None:
             stars = "★★★☆☆"
             coeff = 1.00
         elif val >= -8.0:
-            stars = "★★☆☆"
+            stars = "★★☆☆☆"
             coeff = 0.90
         else:
             stars = "★☆☆☆☆"
@@ -539,8 +584,9 @@ def run() -> None:
         print(f"  ・📁 {s:25s} ➔ 40日平均: {val:+6.2f}% ｜ 評価: {stars} (セクター係数: {coeff:.2f})")
 
     technical_passed = []
+    waiting_passed = []
 
-    print("\n=== テクニカル ＆ 流動性の一次足切りスクリーニングを実行します ===")
+    print("\n=== テクニカル 一次足切りスクリーニングを実行します ===")
     for ticker, df_ticker in all_histories.items():
         try:
             hist = prepare_price_history(df_ticker)
@@ -550,32 +596,43 @@ def run() -> None:
             hist = calc_indicators(hist)
             latest, latest_date = select_latest_completed_row(hist)
 
-            if not passes_long_term_filter_technical_only(latest):
+            # 💡 【Version 2.5：二重構造スキャン（①：待機銘柄・ウォッチリスト）の自動分離】
+            # ルートA: 通常の買い候補シグナル
+            if passes_long_term_filter_technical_only(latest):
+                technical_passed.append((ticker, hist, latest, latest_date, "buy_signal"))
                 continue
+                
+            # ルートB: 待機銘柄（テクニカルPO等は未完成だが、出来高が極限に枯渇し、Forgotten Scoreが70点以上の仕込み前夜）
+            if latest["turnover"] >= MIN_TURNOVER and latest["forgotten_score"] >= 70:
+                waiting_passed.append((ticker, hist, latest, latest_date, "waiting"))
 
-            technical_passed.append((ticker, hist, latest, latest_date))
         except Exception:
             continue
 
-    print(f"➔ [一次フィルター合格]: {len(technical_passed)} 銘柄 / 有効 {len(all_histories)} 銘柄中")
+    print(f"➔ [一次合格：買い候補シグナル] : {len(technical_passed)} 銘柄")
+    print(f"➔ [一次合格：注目待機リスト]   : {len(waiting_passed)} 銘柄")
 
+    # ２つのルートの合格者を一挙にマージ
+    all_passed = technical_passed + waiting_passed
+
+    # 期待値と忘却スコアに基づいてソート
     def get_temp_score(item) -> float:
-        _, _, latest, _ = item
+        _, _, latest, _, sig_type = item
         score = 0.0
-        if latest["Close"] >= latest["ma25"]: score += 2.0
-        if latest["Close"] >= latest["ma75"]: score += 2.5
-        if latest["ma25_slope_pct"] > 0: score += 1.5
-        if latest["ma75_slope_pct"] > 0: score += 1.8
+        # 買い候補には優先的に +5点 のブーストを加算
+        if sig_type == "buy_signal":
+            score += 5.0
+        score += float(latest["forgotten_score"]) * 0.25
         return score
 
-    technical_passed.sort(key=get_temp_score, reverse=True)
-    technical_passed_limited = technical_passed[:MAX_FUNDAMENTALS_精査数]
+    all_passed.sort(key=get_temp_score, reverse=True)
+    all_passed_limited = all_passed[:MAX_FUNDAMENTALS_精査数]
 
-    print(f"➔ [厳選リミッター作動]: 一次合格 {len(technical_passed)} 銘柄から、スコア上位 {len(technical_passed_limited)} 銘柄に精査対象を絞り込みました。")
-    print("\n=== [第2段階] テクニカル合格銘柄に対するファンダメンタルズ個別精査を開始します ===")
+    print(f"➔ [厳選リミッター作動]: 統合合格 {len(all_passed)} 銘柄から、スコア上位 {len(all_passed_limited)} 銘柄に精査対象を絞り込みました。")
+    print("\n=== [第2段階] 統合合格銘柄に対するファンダメンタルズ個別精査を開始します ===")
     
-    for idx, (ticker, hist, latest, latest_date) in enumerate(technical_passed_limited):
-        print(f"  [{idx + 1}/{len(technical_passed_limited)}] 詳細精査中... {ticker}")
+    for idx, (ticker, hist, latest, latest_date, sig_type) in enumerate(all_passed_limited):
+        print(f"  [{idx + 1}/{len(all_passed_limited)}] 詳細精査中... {ticker} (種別: {sig_type})")
         
         ticker_obj = None
         try:
@@ -586,8 +643,8 @@ def run() -> None:
                 time.sleep(SLEEP_SEC)
                 continue
 
-            # 【地雷セクター完全除外（ハードブロック）】
             current_sector = fundamentals.get("sector", "不明")
+            # 【地雷セクター（不動産、ヘルスケア）の完全除外ハードブロック】
             if current_sector in ["Real Estate", "Healthcare"]:
                 print(f"    ➔ ❌ [地雷セクター完全除外] {ticker} は不人気セクター（{current_sector}）のため、自動足切りしました。")
                 time.sleep(SLEEP_SEC)
@@ -616,7 +673,7 @@ def run() -> None:
             screen_date = latest_date if screen_date is None else max(screen_date, latest_date)
             score, trend_score, quality_score, strength_score = score_row(latest, fundamentals)
 
-            # === 💡 【Version 2.4追加】：セクター係数と相対強度（Relative Strength）の算出 ===
+            # セクター評価星と係数のマッピング
             s_info = sector_meta.get(current_sector, {"stars": "★★★☆☆", "coeff": 1.0, "avg_return": 0.0})
             sector_stars = s_info["stars"]
             sector_coeff = s_info["coeff"]
@@ -625,10 +682,10 @@ def run() -> None:
             close_orig_40 = float(hist["Close"].iloc[-40]) if len(hist) >= 40 else float(hist["Close"].iloc[0])
             stock_return_40d = (latest["Close"] - close_orig_40) / close_orig_40 * 100
             
-            # 相対強度（Relative Strength = 個別騰落率 - セクター平均）
+            # 相対強度（Relative Strength）の算出 (③)
             relative_strength = round(stock_return_40d - s_info["avg_return"], 2)
             
-            # 最終総合スコア = 企業スコア * セクター係数 (②：セクター補正の導入)
+            # 最終総合スコアにセクター補正（0.8〜1.2）を乗算
             final_score = round(score * sector_coeff, 2)
 
             rows.append(
@@ -638,7 +695,7 @@ def run() -> None:
                     "generated_at": generated_at,
                     "ticker": ticker,
                     "name": name_map.get(ticker, ticker),
-                    "score": final_score,         # ★ 補正された最終スコアを代入
+                    "score": final_score,         
                     "trend_score": trend_score,
                     "quality_score": quality_score,
                     "strength_score": strength_score,
@@ -704,10 +761,13 @@ def run() -> None:
                     "reversal_from_bearish_po": bool(latest["reversal_from_bearish_po"]),
                     "sector": current_sector,
                     "industry": fundamentals["industry"],
-                    
-                    # ★【Version 2.4追加】：セクター統計メタデータ
                     "sector_stars": sector_stars,
-                    "relative_strength": relative_strength
+                    "relative_strength": relative_strength,
+                    
+                    # ★【Version 2.5新設】：忘却・待機メタデータ
+                    "forgotten_score": int(latest["forgotten_score"]),
+                    "deep_value_setup": bool(latest["deep_value_setup"]),
+                    "position_status": sig_type   # 「buy_signal」または「waiting」を格納
                 }
             )
         except Exception as e:
@@ -726,7 +786,7 @@ def run() -> None:
     df = df.sort_values(["score", "quality_score", "trend_score"], ascending=False).reset_index(drop=True)
     df["rank"] = df.index + 1
     
-    # 既存のカラム構成
+    # 待機・忘却カラムを最後尾に綺麗にマッピング
     output_df = df[
         [
             "run_date", "screen_version", "generated_at", "rank", "ticker", "name",
@@ -751,7 +811,8 @@ def run() -> None:
             "ma25_cross_200_recent_tight", "ma75_cross_200_recent_tight",
             "perfect_order_recent", "perfect_order_today", "perfect_order_recent_tight",
             "initial_trend_signal", "early_reversal_setup", "reversal_from_bearish_po",
-            "sector", "industry", "sector_stars", "relative_strength" # 追加
+            "sector", "industry", "sector_stars", "relative_strength",
+            "forgotten_score", "deep_value_setup", "position_status" # 追加
         ]
     ].head(TOP_N_OUTPUT)
     
