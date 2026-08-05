@@ -18,7 +18,15 @@ NOTIFICATION_EMAIL = os.environ.get("NOTIFICATION_EMAIL")
 SENDER_NAME = "Sniper OS - Long Term Screener"
 
 
+# 👇 --- 【修正後】：関数の先頭に、1箇所だけこの2行を追加します ---
 def get_chart_links(ticker: str) -> str:
+    """
+    あなたが作成された、株探決算・Yahoo!掲示板を含む美しい3行インデントリンク生成ロジック
+    """
+    # 👈 ★【Version 1.2.2安全防壁】：もしティッカーが空(None/NaN)なら、以降の計算をせず安全に空文字を返します
+    if pd.isna(ticker) or not ticker or not isinstance(ticker, str):
+        return ""
+
     code = ticker.split(".")[0] if "." in ticker else ticker
     tradingview_url = f"https://jp.tradingview.com/chart/?symbol=TSE:{code}"
     kabutan_url = f"https://kabutan.jp/stock/finance?code={code}"
