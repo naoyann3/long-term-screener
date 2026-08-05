@@ -1,4 +1,4 @@
-# notify_long_term_results.py (Version 1.3 - AI Academy Momentum Edition)
+# notify_long_term_results.py (Version 1.4 - AI Academy Momentum Complete Edition)
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 import os
@@ -18,12 +18,11 @@ NOTIFICATION_EMAIL = os.environ.get("NOTIFICATION_EMAIL")
 SENDER_NAME = "Sniper OS - Long Term Screener"
 
 
-# 👇 --- 【修正後】：関数の先頭に、1箇所だけこの2行を追加します ---
 def get_chart_links(ticker: str) -> str:
     """
     あなたが作成された、株探決算・Yahoo!掲示板を含む美しい3行インデントリンク生成ロジック
     """
-    # 👈 ★【Version 1.2.2安全防壁】：もしティッカーが空(None/NaN)なら、以降の計算をせず安全に空文字を返します
+    # ★【Version 1.2.2安全防壁】：もしティッカーが空(None/NaN)なら、以降の計算をせず安全に空文字を返します
     if pd.isna(ticker) or not ticker or not isinstance(ticker, str):
         return ""
 
@@ -47,8 +46,7 @@ def build_mail_body(latest_df: pd.DataFrame, history_df: pd.DataFrame) -> str:
     body += f"## 📈 【中期成長株・司令室】{today_str} 需給・局面分類レポート\n"
     body += "## ━━━━━━━━━━━━━━━━━━\n\n"
 
-    # 1. スキャニング合格者の仕分け（買い候補 vs 待機銘柄：①）
-    # position_status が 'buy_signal' のものを「買い候補」、'waiting' のものを「待機・注目リスト」に仕分けます
+    # 1. スキャニング合格者の仕分け（買い候補 vs 待機銘柄）
     buy_signals = latest_df[latest_df["position_status"] == "buy_signal"] if "position_status" in latest_df.columns else latest_df
     waiting_signals = latest_df[latest_df["position_status"] == "waiting"] if "position_status" in latest_df.columns else pd.DataFrame()
 
@@ -59,15 +57,21 @@ def build_mail_body(latest_df: pd.DataFrame, history_df: pd.DataFrame) -> str:
 
     for idx, (_, r) in enumerate(buy_signals.head(10).iterrows(), 1):
         ticker = r.get("ticker")
+        if pd.isna(ticker) or not ticker:
+            continue
+            
         name = r.get("name")
-        score = r.get("score")
-        close = r.get("close")
-        roe = r.get("roe_pct")
-        growth = r.get("revenue_growth_pct")
-        cap = r.get("market_cap_billion")
+        
+        # 👈 ★【Version 1.4セキュリティ防壁】：数値のロード時に、空（None）を自動で0.0に補正してクラッシュを完殺します
+        score = float(r.get("score")) if pd.notna(r.get("score")) else 0.0
+        close = float(r.get("close")) if pd.notna(r.get("close")) else 0.0
+        roe = float(r.get("roe_pct")) if pd.notna(r.get("roe_pct")) else 0.0
+        growth = float(r.get("revenue_growth_pct")) if pd.notna(r.get("revenue_growth_pct")) else 0.0
+        cap = float(r.get("market_cap_billion")) if pd.notna(r.get("market_cap_billion")) else 0.0
+        
         sector = r.get("sector", "不明")
         stars = r.get("sector_stars", "★★★☆☆")
-        rs = r.get("relative_strength", 0.0)
+        rs = float(r.get("relative_strength")) if pd.notna(r.get("relative_strength")) else 0.0
 
         links_text = get_chart_links(ticker)
         body += f"## {idx}. {name} ({ticker}){links_text}\n"
@@ -86,7 +90,7 @@ def build_mail_body(latest_df: pd.DataFrame, history_df: pd.DataFrame) -> str:
             body += "  ・📢【動的着眼点】: 25日・75日・200日線の上で頑健に推移している、教科書通りのパーフェクトオーダー上昇トレンド株です。\n"
         body += "----------------------------------------\n\n"
 
-    # --- B. 待機銘柄セクション（仕込み前夜・注目リスト：① ＆ ②） ---
+    # --- B. 待機銘柄セクション（仕込み前夜・注目リスト） ---
     body += f"### 🟡 【待機：無関心・売り枯れ注目リスト】: 【 {len(waiting_signals)} 銘柄 】\n"
     body += "まだ買いシグナル（出来高急増など）は出ていませんが、市場から忘れ去られ、売りが完全に細りきった『爆発前夜』の監視銘柄です。\n"
     body += "----------------------------------------\n\n"
@@ -94,11 +98,14 @@ def build_mail_body(latest_df: pd.DataFrame, history_df: pd.DataFrame) -> str:
     if not waiting_signals.empty:
         for idx, (_, r) in enumerate(waiting_signals.head(10).iterrows(), 1):
             ticker = r.get("ticker")
+            if pd.isna(ticker) or not ticker:
+                continue
+                
             name = r.get("name")
-            close = r.get("close")
+            close = float(r.get("close")) if pd.notna(r.get("close")) else 0.0
             sector = r.get("sector", "不明")
             stars = r.get("sector_stars", "★★★☆☆")
-            forgotten_score = int(r.get("forgotten_score", 70))
+            forgotten_score = int(r.get("forgotten_score")) if pd.notna(r.get("forgotten_score")) else 70
             is_deep_value = r.get("deep_value_setup", False)
 
             links_text = get_chart_links(ticker)
