@@ -1,4 +1,4 @@
-# notify_long_term_results.py (Version 1.2 - Sector Momentum Integration)
+# notify_long_term_results.py (Version 1.3 - AI Academy Momentum Edition)
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 import os
@@ -11,7 +11,7 @@ import yfinance as yf
 # パス定義
 from config import CANDIDATE_HISTORY_CSV
 
-# 環境変数
+# 環境変数 (GitHub Secrets からロード)
 GMAIL_USER = os.environ.get("GMAIL_USER")
 GMAIL_PASS = os.environ.get("GMAIL_APP_PASSWORD")
 NOTIFICATION_EMAIL = os.environ.get("NOTIFICATION_EMAIL")
@@ -36,53 +36,79 @@ def build_mail_body(latest_df: pd.DataFrame, history_df: pd.DataFrame) -> str:
     today_str = pd.Timestamp.now().strftime("%Y-%m-%d")
 
     body = "## ━━━━━━━━━━━━━━━━━━\n"
-    body += f"## 📈 【中期成長株】{today_str} スクリーニング合格候補\n"
+    body += f"## 📈 【中期成長株・司令室】{today_str} 需給・局面分類レポート\n"
     body += "## ━━━━━━━━━━━━━━━━━━\n\n"
 
-    # 1. 本日の合格候補サマリー
-    body += f"### 🟢 本日の合格銘柄: 【 {len(latest_df)} 銘柄 】\n"
-    body += "パーフェクトオーダーかつ高い利益率（ROE 8%以上）、売上成長（5%以上）を満たした中期成長候補の一覧です。\n"
+    # 1. スキャニング合格者の仕分け（買い候補 vs 待機銘柄：①）
+    # position_status が 'buy_signal' のものを「買い候補」、'waiting' のものを「待機・注目リスト」に仕分けます
+    buy_signals = latest_df[latest_df["position_status"] == "buy_signal"] if "position_status" in latest_df.columns else latest_df
+    waiting_signals = latest_df[latest_df["position_status"] == "waiting"] if "position_status" in latest_df.columns else pd.DataFrame()
+
+    # --- A. 買い候補セクション（即戦力） ---
+    body += f"### 🟢 【本命：買い候補シグナル点灯】: 【 {len(buy_signals)} 銘柄 】\n"
+    body += "移動平均パーフェクトオーダーが完成し、決算業績・時価総額条件をすべてクリアした中期本命候補の一覧です。\n"
     body += "----------------------------------------\n\n"
 
-    top_10 = latest_df.head(10)
-    for idx, r in top_10.iterrows():
-        rank = r.get("監視順位", r.get("rank", idx + 1))
-        ticker = r.get("ティッカー", r.get("ticker"))
-        name = r.get("銘柄名", r.get("name"))
-        score = r.get("総合スコア", r.get("score"))
-        close = r.get("終値", r.get("close"))
-        roe = r.get("ROE(%)", r.get("roe_pct"))
-        growth = r.get("売上成長率(%)", r.get("revenue_growth_pct"))
-        cap = r.get("時価総額(十億円)", r.get("market_cap_billion"))
-
-        # ★【Version 1.2追加】：セクターモメンタム指標のロード
-        sector = r.get("セクター", r.get("sector", "不明"))
+    for idx, (_, r) in enumerate(buy_signals.head(10).iterrows(), 1):
+        ticker = r.get("ticker")
+        name = r.get("name")
+        score = r.get("score")
+        close = r.get("close")
+        roe = r.get("roe_pct")
+        growth = r.get("revenue_growth_pct")
+        cap = r.get("market_cap_billion")
+        sector = r.get("sector", "不明")
         stars = r.get("sector_stars", "★★★☆☆")
         rs = r.get("relative_strength", 0.0)
 
         links_text = get_chart_links(ticker)
-
-        body += f"## {rank}. {name} ({ticker}){links_text}\n"
-        body += f"  ・総合スコア: **{score:.1f}点** (終値: {close:.1f}円 / 時価総額: {cap:.1f}十億円)\n"
-        body += f"  ・セクター風: **{sector:20s} 【 {stars} 】**(相対強度: **{rs:+.1f}%**)\n"  # 👈 ★【マージ】
+        body += f"## {idx}. {name} ({ticker}){links_text}\n"
+        body += f"  ・総合スコア: **{score:.1f}点** (終値: {close:.1f}円 ｜ 時価総額: {cap:.1f}十億円)\n"
+        body += f"  ・セクター風: **{sector:20s} 【 {stars} 】**(相対強度: **{rs:+.1f}%**)\n"
         body += f"  ・財務業績  : ROE: **{roe:.1f}%** ｜ 売上成長率: **{growth:.1f}%**\n"
         
-        # 動的シグナル解説
-        if r.get("reversal_from_bearish_po"):
-            body += "  ・📢【動的着眼点】: 長期の下降（逆PO）から『上昇パーフェクトオーダー』へとトレンドの主導権が完全に切り替わった、大転換初日の新鮮な形状です。\n"
-        elif r.get("early_reversal_setup"):
-            body += "  ・📢【動的着眼点】: 下降トレンドの底固めから、25日線が75日線をGC。中期的な反転準備のパターントリガーが引かれました。\n"
-        elif r.get("reclaim_ma75_close"):
-            body += "  ・📢【動的着眼点】: 綺麗なパーフェクトオーダーを維持しながら、中期75日移動平均線での反発（サポート反応）を確認した絶好の押し目位置です。\n"
+        # 動的解説
+        is_reversal = r.get("reversal_from_bearish_po", False)
+        is_pullback = r.get("push_filter_ok", False)
+        if is_reversal:
+            body += "  ・📢【動的着眼点】: 下降トレンド（逆PO）から『上昇パーフェクトオーダー』へと大口資金が完全に切り替わった、転換初日の大本命形状です。\n"
+        elif is_pullback:
+            body += "  ・📢【動的着眼点】: 綺麗なパーフェクトオーダーを維持しながら、中期支持線（75日線）での反発を確認した安全性の高い押し目位置です。\n"
         else:
-            body += "  ・📢【動的解説】: 強固な上昇トレンドを維持した中期優良成長株。主要移動平均線の支持線としての機能を観察してください。\n"
-
+            body += "  ・📢【動的着眼点】: 25日・75日・200日線の上で頑健に推移している、教科書通りのパーフェクトオーダー上昇トレンド株です。\n"
         body += "----------------------------------------\n\n"
 
-    if len(latest_df) > 10:
-        body += f"※他 {len(latest_df) - 10} 銘柄が合格。詳細は results フォルダ内の long_term_watchlist.csv をご確認ください。\n\n"
+    # --- B. 待機銘柄セクション（仕込み前夜・注目リスト：① ＆ ②） ---
+    body += f"### 🟡 【待機：無関心・売り枯れ注目リスト】: 【 {len(waiting_signals)} 銘柄 】\n"
+    body += "まだ買いシグナル（出来高急増など）は出ていませんが、市場から忘れ去られ、売りが完全に細りきった『爆発前夜』の監視銘柄です。\n"
+    body += "----------------------------------------\n\n"
 
-    # 2. 🔁 【自動復習・答え合わせコーナー】
+    if not waiting_signals.empty:
+        for idx, (_, r) in enumerate(waiting_signals.head(10).iterrows(), 1):
+            ticker = r.get("ticker")
+            name = r.get("name")
+            close = r.get("close")
+            sector = r.get("sector", "不明")
+            stars = r.get("sector_stars", "★★★☆☆")
+            forgotten_score = int(r.get("forgotten_score", 70))
+            is_deep_value = r.get("deep_value_setup", False)
+
+            links_text = get_chart_links(ticker)
+            body += f"## {idx}. {name} ({ticker}){links_text}\n"
+            body += f"  ・現在終値  : **{close:.1f}円** ｜ **無関心（Forgotten Score）: 【 {forgotten_score} 点 】** (100点満点)\n"
+            body += f"  ・セクター風: **{sector:20s} 【 {stars} 】**\n"
+            
+            # ③：半値八掛け二割引フラグの動的解説
+            if is_deep_value:
+                body += f"  ・⚠️【歴史的大底】: 52週高値から **64%以上下落（格言：半値・八掛け・二割引）** を達成した、大口から完全に忘れ去られた超ディープバリュー株です。\n"
+                
+            body += "  ・📢【動的着眼点】: 出来高が消滅し、ボラティリティも極限スクイーズしています。数日〜数週間以内に『出来高が突如2倍以上に点火する大口の足跡』が出現するかどうかを毎日監視してください。\n"
+            body += "----------------------------------------\n\n"
+    else:
+        body += "  ・本日の極限売り枯れ（待機銘柄）の合格者はありません。\n"
+        body += "----------------------------------------\n\n"
+
+    # 3. 🔁 【自動復習・答え合わせコーナー】
     body += "## 🔁 【復習コーナー（Review Corner）】\n"
     body += "過去に合格台帳に登録された銘柄たちが、その後どのように推移しているかを自動で答え合わせします。\n\n"
 
@@ -116,7 +142,7 @@ def build_mail_body(latest_df: pd.DataFrame, history_df: pd.DataFrame) -> str:
     else:
         body += "  ・過去の合格銘柄データがまだありません。明日以降、自動追跡が開始されます。\n\n"
 
-    # 3. 🧪 【自律統計コーナー】
+    # 4. 🧪 【自律統計コーナー】
     body += "## 🧪 【中期スクリーニング自律統計】\n"
     if not history_df.empty:
         completed_df = history_df[history_df["status"] == "completed"]
