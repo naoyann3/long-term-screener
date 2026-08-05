@@ -1,4 +1,4 @@
-# notify_long_term_results.py (Version 1.4 - AI Academy Momentum Complete Edition)
+# notify_long_term_results.py (Version 1.5 - Absolute Complete Edition)
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 import os
@@ -22,7 +22,7 @@ def get_chart_links(ticker: str) -> str:
     """
     あなたが作成された、株探決算・Yahoo!掲示板を含む美しい3行インデントリンク生成ロジック
     """
-    # ★【Version 1.2.2安全防壁】：もしティッカーが空(None/NaN)なら、以降の計算をせず安全に空文字を返します
+    # 【Version 1.2.2安全防壁】：もしティッカーが空(None/NaN)なら、以降の計算をせず安全に空文字を返します
     if pd.isna(ticker) or not ticker or not isinstance(ticker, str):
         return ""
 
@@ -56,20 +56,19 @@ def build_mail_body(latest_df: pd.DataFrame, history_df: pd.DataFrame) -> str:
     body += "----------------------------------------\n\n"
 
     for idx, (_, r) in enumerate(buy_signals.head(10).iterrows(), 1):
-        ticker = r.get("ticker")
+        # 👈 ★【Version 1.5修正】：日本語と英語の両方のカラム名から安全にロード（これでデータ消失を防ぎます）
+        ticker = r.get("ティッカー", r.get("ticker"))
         if pd.isna(ticker) or not ticker:
             continue
             
-        name = r.get("name")
+        name = r.get("銘柄名", r.get("name"))
+        score = float(r.get("総合スコア", r.get("score"))) if pd.notna(r.get("総合スコア", r.get("score"))) else 0.0
+        close = float(r.get("終値", r.get("close"))) if pd.notna(r.get("終値", r.get("close"))) else 0.0
+        roe = float(r.get("ROE(%)", r.get("roe_pct"))) if pd.notna(r.get("ROE(%)", r.get("roe_pct"))) else 0.0
+        growth = float(r.get("売上成長率(%)", r.get("revenue_growth_pct"))) if pd.notna(r.get("売上成長率(%)", r.get("revenue_growth_pct"))) else 0.0
+        cap = float(r.get("時価総額(十億円)", r.get("market_cap_billion"))) if pd.notna(r.get("時価総額(十億円)", r.get("market_cap_billion"))) else 0.0
         
-        # 👈 ★【Version 1.4セキュリティ防壁】：数値のロード時に、空（None）を自動で0.0に補正してクラッシュを完殺します
-        score = float(r.get("score")) if pd.notna(r.get("score")) else 0.0
-        close = float(r.get("close")) if pd.notna(r.get("close")) else 0.0
-        roe = float(r.get("roe_pct")) if pd.notna(r.get("roe_pct")) else 0.0
-        growth = float(r.get("revenue_growth_pct")) if pd.notna(r.get("revenue_growth_pct")) else 0.0
-        cap = float(r.get("market_cap_billion")) if pd.notna(r.get("market_cap_billion")) else 0.0
-        
-        sector = r.get("sector", "不明")
+        sector = r.get("セクター", r.get("sector", "不明"))
         stars = r.get("sector_stars", "★★★☆☆")
         rs = float(r.get("relative_strength")) if pd.notna(r.get("relative_strength")) else 0.0
 
@@ -97,13 +96,14 @@ def build_mail_body(latest_df: pd.DataFrame, history_df: pd.DataFrame) -> str:
 
     if not waiting_signals.empty:
         for idx, (_, r) in enumerate(waiting_signals.head(10).iterrows(), 1):
-            ticker = r.get("ticker")
+            # 👈 ★【Version 1.5修正】：日本語と英語の両方のカラム名から安全にロード
+            ticker = r.get("ティッカー", r.get("ticker"))
             if pd.isna(ticker) or not ticker:
                 continue
                 
-            name = r.get("name")
-            close = float(r.get("close")) if pd.notna(r.get("close")) else 0.0
-            sector = r.get("sector", "不明")
+            name = r.get("銘柄名", r.get("name"))
+            close = float(r.get("終値", r.get("close"))) if pd.notna(r.get("終値", r.get("close"))) else 0.0
+            sector = r.get("セクター", r.get("sector", "不明"))
             stars = r.get("sector_stars", "★★★☆☆")
             forgotten_score = int(r.get("forgotten_score")) if pd.notna(r.get("forgotten_score")) else 70
             is_deep_value = r.get("deep_value_setup", False)
@@ -145,10 +145,14 @@ def build_mail_body(latest_df: pd.DataFrame, history_df: pd.DataFrame) -> str:
                     ticker_obj = yf.Ticker(ticker)
                     hist = ticker_obj.history(period="5d", interval="1d", auto_adjust=False)
                     if not hist.empty:
-                        curr_c = float(hist["Close"].iloc[-1])
-                        perf = (curr_c - orig_c) / orig_c * 100
-                        icon = "📈" if perf >= 0 else "📉"
-                        body += f"  ・{icon} **{name} ({ticker})** ➔ 登録時: {orig_c:.1f}円 ➔ 本日終値: {curr_c:.1f}円 (騰落: **{perf:+.1f}%**)\n"
+                        # 👈 ★【Version 1.5追加】：復習コーナーでも、yfinanceの時間外NaNダミー行を完璧に排除します
+                        hist = hist.dropna(subset=["Close"])
+                        
+                        if not hist.empty:
+                            curr_c = float(hist["Close"].iloc[-1])
+                            perf = (curr_c - orig_c) / orig_c * 100
+                            icon = "📈" if perf >= 0 else "📉"
+                            body += f"  ・{icon} **{name} ({ticker})** ➔ 登録時: {orig_c:.1f}円 ➔ 本日終値: {curr_c:.1f}円 (騰落: **{perf:+.1f}%**)\n"
                 except Exception:
                     body += f"  ・ {name} ({ticker}) ➔ 登録時: {orig_c:.1f}円 (追跡中)\n"
             body += "\n"
