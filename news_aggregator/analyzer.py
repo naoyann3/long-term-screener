@@ -6,16 +6,15 @@ from config import GEMINI_API_KEY
 def analyze_article_with_llm(article: dict) -> dict | None:
     """
     LLM (Gemini API) を用いて、ニュースのノイズカット・スコアリングを実行。
-    エラー時には沈黙せず、ステータスコードと原因をログに出力します。
+    モデル名を2026年最新の「gemini-3.6-flash」に更新してエラーを回避します。
     """
-    # 2026年時点で最も安定しているモデル識別子 (gemini-2.5-flash / gemini-1.5-flash) を指定
-    # (APIキーが未登録または無効の場合、URLは叩けてもエラーが返ります)
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={GEMINI_API_KEY}"
+    # ★【最重要修正】：モデル名を新規ユーザーでも利用可能な「gemini-3.6-flash」に切り替え
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent?key={GEMINI_API_KEY}"
     
     prompt = f"""
 あなたは冷徹な機関投資家のチーフ・リサーチアナリストです。
 提供されたニュースから、主観、感情論、投資の煽り文句、不要な修飾表現を【100%排除】し、
-市場参加者が事実関係を5秒で把握できるよう、客観的な「事実（エビデンス）」のみを抽出して、指定のJSONフォーマットで出力してください。
+市場参加者が事実関係を5秒で把握できるよう、客観的な「事実（エビデンス）」のみを抽出して、指定 of JSONフォーマットで出力してください。
 
 【入力ニュース情報】
 情報源: {article['source']}
@@ -60,7 +59,6 @@ def analyze_article_with_llm(article: dict) -> dict | None:
             parsed_data = json.loads(text_response.strip())
             return parsed_data
         else:
-            # ★【最重要追加】：沈黙せず、ステータスコードとAPIからのエラー本文を出力
             print(f"    [APIエラー] ステータス {response.status_code} を返しました。応答: {response.text}")
     except Exception as e:
         print(f"    [解析スキップ] {article['title'][:15]}... のLLM解析に失敗: {e}")
