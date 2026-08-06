@@ -18,7 +18,7 @@ def build_mail_html(news_rows) -> str:
     白背景の中で強弱シグナルが鮮やかに美しく映える、プロ仕様のインテリジェンス・レポート
     """
     today_str = datetime.now().strftime("%Y-%m-%d")
-    
+    Ftine
     categories = {"地政学": [], "マクロ": [], "株式": [], "暗号資産": []}
     for r in news_rows:
         cat = r.get("category", "マクロ")
@@ -223,7 +223,7 @@ def main():
             art.update(analysis)
             analyzed_list.append(art)
             
-        time.sleep(1.0)  # Gemini API無料枠の制限を考慮したウェイト
+        time.sleep(3.0)  # 👈 1.0秒 から 3.0秒 に変更して、APIへの負荷をさらにマイルドにします
 
     # 3. CSVデータベースに新規マージ保存
     added_count = save_articles_to_csv(analyzed_list)
