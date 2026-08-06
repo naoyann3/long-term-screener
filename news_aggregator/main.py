@@ -6,19 +6,16 @@ import pandas as pd
 import smtplib
 import time
 
-from config import GMAIL_USER, GMAIL_PASS, NOTIFICATION_EMAIL
+# 🌟 config から NEWS_SCORE_THRESHOLD もインポート
+from config import GMAIL_USER, GMAIL_PASS, NOTIFICATION_EMAIL, NEWS_SCORE_THRESHOLD
 from database import init_db, save_articles_to_csv, get_today_high_score_news, DB_CSV_PATH
 from collector import fetch_rss_feeds, fetch_polymarket_odds
 from analyzer import analyze_article_with_llm
 
 def build_mail_html(news_rows) -> str:
-    """
-    【視認性最大化・ホワイトテーマ版】
-    あらゆるメールアプリでの強制反転による文字崩れを防ぎ、
-    白背景の中で強弱シグナルが鮮やかに美しく映える、プロ仕様のインテリジェンス・レポート
-    """
+    """白背景ベースに強弱シグナルが美しく映える、プロ仕様のインテリジェンス・レポート"""
     today_str = datetime.now().strftime("%Y-%m-%d")
-    Ftine
+    
     categories = {"地政学": [], "マクロ": [], "株式": [], "暗号資産": []}
     for r in news_rows:
         cat = r.get("category", "マクロ")
@@ -126,15 +123,15 @@ def build_mail_html(news_rows) -> str:
             
             # センチメントに応じたアクセントカラーの設定
             if sentiment == "強材料":
-                sentiment_color = "#ef5350"  # 鮮やかな赤
+                sentiment_color = "#ef5350"
                 sentiment_bg = "#ffebee"
                 sentiment_text_color = "#c62828"
             elif sentiment == "弱材料":
-                sentiment_color = "#26a69a"  # 鮮やかな緑
+                sentiment_color = "#26a69a"
                 sentiment_bg = "#e0f2f1"
                 sentiment_text_color = "#00695c"
             else:
-                sentiment_color = "#2962ff"  # 鮮やかな青
+                sentiment_color = "#2962ff"
                 sentiment_bg = "#e3f2fd"
                 sentiment_text_color = "#1565c0"
             
@@ -213,8 +210,10 @@ def main():
     # 2. 未登録ニュースのみをLLMで解析
     for idx, art in enumerate(all_articles, 1):
         clean_url = art["url"].strip()
+        
+        # 🌟【最重要本番化】：コメントアウト（#）を外し、重複スキップを正常に稼働させます
         if clean_url in existing_urls:
-            continue  # 重複スキップ
+            continue
 
         print(f"  ・新規解析中 [{idx}/{len(all_articles)}]: {art['title'][:25]}...")
         analysis = analyze_article_with_llm(art)
@@ -223,21 +222,24 @@ def main():
             art.update(analysis)
             analyzed_list.append(art)
             
-        time.sleep(3.0)  # 👈 1.0秒 から 3.0秒 に変更して、APIへの負荷をさらにマイルドにします
+        # 🌟【安定化】：インターバルを 1.0秒 から 3.0秒 に緩和し、429制限を根本から予防します
+        time.sleep(3.0)
 
     # 3. CSVデータベースに新規マージ保存
     added_count = save_articles_to_csv(analyzed_list)
     print(f"➔ 台帳更新完了。新規に {added_count} 本のニュースを CSV に蓄積しました。")
 
-    # 4. 直近のスコア上位15件（かつスコア50点以上の有益ニュース）をGmail配信
+    # 4. 直近のスコア上位15件（かつ config で指定された閾値以上のニュース）を配信
     today_important_news = get_today_high_score_news(limit=15)
-    valid_news = [n for n in today_important_news if int(n.get("score", 0)) >= 50]
+    
+    # 🌟 config の定数 NEWS_SCORE_THRESHOLD（40点）を適用
+    valid_news = [n for n in today_important_news if int(n.get("score", 0)) >= NEWS_SCORE_THRESHOLD]
 
     if valid_news:
         html_mail = build_mail_html(valid_news)
         send_gmail(html_mail, len(valid_news))
     else:
-        print("本日の重要ニュース（50点以上）は0件でした。メール送信をスキップします。")
+        print(f"本日の重要ニュース（{NEWS_SCORE_THRESHOLD}点以上）は0件でした。メール送信をスキップします。")
 
 
 if __name__ == "__main__":
