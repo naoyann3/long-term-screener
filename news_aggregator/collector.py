@@ -1,4 +1,5 @@
 # news_aggregator/collector.py
+import json  # jsonモジュールを追加
 import feedparser
 import requests
 from datetime import datetime
@@ -13,7 +14,7 @@ def fetch_rss_feeds() -> list[dict]:
         print(f"  ・フィード取得中: {source_name}")
         try:
             feed = feedparser.parse(url)
-            for entry in feed.entries[:8]:  # 各フィード最新8件に制限（無用なトラフィック・APIコールを制限）
+            for entry in feed.entries[:8]:  # 各フィード最新8件
                 published = entry.get("published", datetime.now().isoformat())
                 raw_articles.append({
                     "title": entry.title,
@@ -28,9 +29,8 @@ def fetch_rss_feeds() -> list[dict]:
     return raw_articles
 
 def fetch_polymarket_odds() -> list[dict]:
-    """Polymarket APIを叩き、予測市場の各種オッズデータをロード [1, 2]"""
+    """Polymarket APIを叩き、予測市場の各種オッズデータをロード"""
     polymarket_data = []
-    # 活発な予測市場の直近データを5件取得 [1]
     url = "https://gamma-api.polymarket.com/markets?active=true&limit=5"
     try:
         response = requests.get(url, timeout=10)
@@ -38,19 +38,31 @@ def fetch_polymarket_odds() -> list[dict]:
             markets = response.json()
             for m in markets:
                 title = m.get("question", "")
-                outcome_prices = m.get("outcomePrices", [])
-                outcomes = m.get("outcomes", [])
                 
-                # 金利引き下げ確率、選挙オッズ等の表記を生成
-                odds_str = " / ".join([f"{out}: {float(price)*100:.1f}%" for out, price in zip(outcomes, outcome_prices)])
+                # ★【最重要修正】：文字列として埋め込まれたJSONをデコードします
+                outcomes_raw = m.get("outcomes")
+                prices_raw = m.get("outcomePrices")
                 
-                polymarket_data.append({
-                    "title": f"【予測市場確率】 {title}",
-                    "url": f"https://polymarket.com/event/{m.get('slug', '')}",
-                    "published_at": datetime.now().isoformat(),
-                    "source": "Polymarket",
-                    "content": f"現在の予測市場における確率データ：{odds_str}"
-                })
+                if outcomes_raw and prices_raw:
+                    try:
+                        outcomes = json.loads(outcomes_raw)
+                        outcome_prices = json.loads(prices_raw)
+                        
+                        # オッズ（確率）の文字列化
+                        odds_str = " / ".join([f"{out}: {float(price)*100:.1f}%" for out, price in zip(outcomes, outcome_prices)])
+                        
+                        polymarket_data.append({
+                            "title": f"【予測市場確率】 {title}",
+                            "url": f"https://polymarket.com/event/{m.get('slug', '')}",
+                            "published_at": datetime.now().isoformat(),
+                            "source": "Polymarket",
+                            "content": f"現在の予測市場における確率データ：{odds_str}"
+                        })
+                    except Exception as inner_err:
+                        print(f"    [デコードエラー] {title[:15]}... のパースに失敗: {inner_err}")
+                        
+        else:
+            print(f"  [警告] Polymarket APIがステータスコード {response.status_code} を返しました。")
     except Exception as e:
         print(f"  [警告] Polymarket API のロード中に例外が発生しました: {e}")
         
