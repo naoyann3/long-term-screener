@@ -213,8 +213,8 @@ def main():
     # 2. 未登録ニュースのみをLLMで解析
     for idx, art in enumerate(all_articles, 1):
         clean_url = art["url"].strip()
-        #if clean_url in existing_urls:
-        #    continue  # 重複スキップ
+        if clean_url in existing_urls:
+            continue  # 重複スキップ
 
         print(f"  ・新規解析中 [{idx}/{len(all_articles)}]: {art['title'][:25]}...")
         analysis = analyze_article_with_llm(art)
