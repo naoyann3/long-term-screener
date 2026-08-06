@@ -5,9 +5,11 @@ from config import GEMINI_API_KEY
 
 def analyze_article_with_llm(article: dict) -> dict | None:
     """
-    LLM (Gemini API) を用いて、感情論・煽りを排除し、
-    ファクト分類、0-100点スコアリング、強弱判定、関連アセットを構造化JSONで一撃出力
+    LLM (Gemini API) を用いて、ニュースのノイズカット・スコアリングを実行。
+    エラー時には沈黙せず、ステータスコードと原因をログに出力します。
     """
+    # 2026年時点で最も安定しているモデル識別子 (gemini-2.5-flash / gemini-1.5-flash) を指定
+    # (APIキーが未登録または無効の場合、URLは叩けてもエラーが返ります)
     url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={GEMINI_API_KEY}"
     
     prompt = f"""
@@ -40,7 +42,7 @@ def analyze_article_with_llm(article: dict) -> dict | None:
             "parts": [{"text": prompt}]
         }],
         "generationConfig": {
-            "responseMimeType": "application/json"  # JSON出力モードを強制指定
+            "responseMimeType": "application/json"
         }
     }
 
@@ -50,7 +52,6 @@ def analyze_article_with_llm(article: dict) -> dict | None:
             res_json = response.json()
             text_response = res_json["candidates"][0]["content"]["parts"][0]["text"].strip()
             
-            # 万が一Markdownブロックが含まれていた場合のクレンジング
             if text_response.startswith("```"):
                 text_response = text_response.split("\n", 1)[1]
                 if text_response.endswith("```"):
@@ -58,6 +59,9 @@ def analyze_article_with_llm(article: dict) -> dict | None:
                     
             parsed_data = json.loads(text_response.strip())
             return parsed_data
+        else:
+            # ★【最重要追加】：沈黙せず、ステータスコードとAPIからのエラー本文を出力
+            print(f"    [APIエラー] ステータス {response.status_code} を返しました。応答: {response.text}")
     except Exception as e:
         print(f"    [解析スキップ] {article['title'][:15]}... のLLM解析に失敗: {e}")
         
