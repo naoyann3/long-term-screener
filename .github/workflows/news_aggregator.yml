@@ -2,7 +2,7 @@ name: 📬 Macro News Aggregator Daily Run
 
 on:
   schedule:
-    # 毎日日本時間 6:15（UTC 21:15）に自動稼働
+    # 毎日日本時間 6:15（UTC 21:15）に自動稼働します
     - cron: '15 21 * * *'
   workflow_dispatch: # 手動でいつでもトリガー可能
 
@@ -22,7 +22,7 @@ jobs:
       - name: Install Dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install feedparser requests pandas
+          pip install -r news_aggregator/requirements.txt
 
       - name: Run News Aggregator Engine
         env:
@@ -33,7 +33,7 @@ jobs:
         run: |
           python news_aggregator/main.py
 
-      # ★【重要】：更新された news_intelligence.csv をリポジトリに自動コミット・プッシュ
+      # ★【最重要】：新しく蓄積・マージされた CSV 台帳をリポジトリに安全にプッシュします
       - name: Commit and Push Database Update
         run: |
           git config --global user.name "GitHub Actions"
