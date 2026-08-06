@@ -12,7 +12,11 @@ from collector import fetch_rss_feeds, fetch_polymarket_odds
 from analyzer import analyze_article_with_llm
 
 def build_mail_html(news_rows) -> str:
-    """ノイズを削ぎ落としたファクト重視の美しいHTMLメールを動的作成"""
+    """
+    【視認性最大化・ホワイトテーマ版】
+    あらゆるメールアプリでの強制反転による文字崩れを防ぎ、
+    白背景の中で強弱シグナルが鮮やかに美しく映える、プロ仕様のインテリジェンス・レポート
+    """
     today_str = datetime.now().strftime("%Y-%m-%d")
     
     categories = {"地政学": [], "マクロ": [], "株式": [], "暗号資産": []}
@@ -27,52 +31,131 @@ def build_mail_html(news_rows) -> str:
     <html>
     <head>
       <style>
-        body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background-color: #131722; color: #d1d4dc; padding: 20px; }}
-        h1 {{ color: #2962ff; font-size: 20px; border-bottom: 2px solid #2962ff; padding-bottom: 8px; }}
-        h2 {{ color: #ff9800; font-size: 14px; margin-top: 25px; border-bottom: 1px solid #2a2e39; padding-bottom: 4px; }}
-        .news-card {{ background-color: #1c2030; padding: 12px; border-radius: 4px; margin-bottom: 12px; border-left: 4px solid #2962ff; }}
-        .score {{ font-weight: bold; padding: 2px 6px; border-radius: 3px; font-size: 11px; }}
-        .score-high {{ background-color: #ef5350; color: white; }}
-        .score-mid {{ background-color: #ff9800; color: white; }}
-        .score-low {{ background-color: #4caf50; color: white; }}
-        .fact-list {{ margin: 6px 0; padding-left: 20px; font-size: 13px; line-height: 1.5; color: #b2b5be; }}
-        .meta-line {{ font-size: 11px; color: #787b86; margin-top: 6px; }}
-        .link {{ color: #2962ff; text-decoration: none; font-weight: bold; }}
+        body {{ 
+          font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; 
+          background-color: #ffffff; 
+          color: #1a1d24; 
+          padding: 20px; 
+          line-height: 1.6;
+        }}
+        h1 {{ 
+          color: #1a1d24; 
+          font-size: 22px; 
+          border-bottom: 3px solid #2962ff; 
+          padding-bottom: 10px; 
+          margin-bottom: 5px;
+          font-weight: bold;
+        }}
+        h2 {{ 
+          color: #2962ff; 
+          font-size: 15px; 
+          margin-top: 30px; 
+          border-bottom: 1px solid #e0e3eb; 
+          padding-bottom: 6px; 
+          font-weight: bold;
+        }}
+        .news-card {{ 
+          background-color: #f8f9fa; 
+          padding: 14px; 
+          border-radius: 6px; 
+          margin-bottom: 14px; 
+          border: 1px solid #e0e3eb;
+          border-left: 5px solid #2962ff; 
+        }}
+        .score {{ 
+          font-weight: bold; 
+          padding: 3px 8px; 
+          border-radius: 4px; 
+          font-size: 11px; 
+          display: inline-block;
+        }}
+        .score-high {{ background-color: #ffebee; color: #c62828; }}
+        .score-mid {{ background-color: #fff3e0; color: #ef6c00; }}
+        .score-low {{ background-color: #e8f5e9; color: #2e7d32; }}
+        .fact-list {{ 
+          margin: 10px 0 5px 0; 
+          padding-left: 18px; 
+          font-size: 13.5px; 
+          color: #33353b; 
+        }}
+        .fact-list li {{
+          margin-bottom: 4px;
+        }}
+        .meta-line {{ 
+          font-size: 11px; 
+          color: #70757f; 
+          margin-top: 10px; 
+          border-top: 1px dashed #e0e3eb;
+          padding-top: 6px;
+        }}
+        .link {{ 
+          color: #1a1d24; 
+          text-decoration: none; 
+          font-weight: bold; 
+        }}
+        .link:hover {{
+          color: #2962ff;
+          text-decoration: underline;
+        }}
       </style>
     </head>
     <body>
       <h1>📬 【マクロインテリジェンス・司令室】 {today_str}</h1>
-      <p style="font-size: 12px; color: #787b86;">主観や投資の煽り文句を100%ノイズカットした、冷徹な事実のみを配信します。</p>
+      <p style="font-size: 12px; color: #70757f; margin-top: 5px; margin-bottom: 20px;">
+        主観や感情的な煽り表現を100%ノイズカットした、冷徹なファクト（客観的エビデンス）のみをお届けします。
+      </p>
     """
 
     for cat_name, items in categories.items():
         if not items:
             continue
-        html += f"<h2>■ {cat_name} ＆ マクロインフラ</h2>"
+        html += f"<h2>■ {cat_name} ＆ 金融インフラ</h2>"
         for item in items:
             score = int(item.get("score", 50))
-            score_class = "score-high" if score >= 90 else ("score-mid" if score >= 70 else "score-low")
+            if score >= 90:
+                score_class = "score-high"
+                score_label = f"最重要: {score}点"
+            elif score >= 70:
+                score_class = "score-mid"
+                score_label = f"判断材料: {score}点"
+            else:
+                score_class = "score-low"
+                score_label = f"参考情報: {score}点"
+                
             sentiment = item.get("sentiment", "中立")
-            sentiment_color = "#ef5350" if sentiment == "強材料" else ("#26a69a" if sentiment == "弱材料" else "#787b86")
+            
+            # センチメントに応じたアクセントカラーの設定
+            if sentiment == "強材料":
+                sentiment_color = "#ef5350"  # 鮮やかな赤
+                sentiment_bg = "#ffebee"
+                sentiment_text_color = "#c62828"
+            elif sentiment == "弱材料":
+                sentiment_color = "#26a69a"  # 鮮やかな緑
+                sentiment_bg = "#e0f2f1"
+                sentiment_text_color = "#00695c"
+            else:
+                sentiment_color = "#2962ff"  # 鮮やかな青
+                sentiment_bg = "#e3f2fd"
+                sentiment_text_color = "#1565c0"
             
             html += f"""
             <div class="news-card" style="border-left-color: {sentiment_color};">
-              <span class="score {score_class}">重要度: {score}点</span> 
-              <span style="color: {sentiment_color}; font-weight: bold; font-size: 11px; margin-left: 8px;">【{sentiment}】</span>
-              <strong style="font-size: 14px; margin-left: 5px;"><a class="link" href="{item['url']}" target="_blank">{item['title']}</a></strong>
+              <span class="score {score_class}">{score_label}</span> 
+              <span style="background-color: {sentiment_bg}; color: {sentiment_text_color}; font-weight: bold; font-size: 11px; padding: 3px 8px; border-radius: 4px; margin-left: 6px;">【{sentiment}】</span>
+              <strong style="font-size: 14px; margin-left: 8px;"><a class="link" href="{item['url']}" target="_blank">{item['title']}</a></strong>
               
               <ul class="fact-list">
-                <li>事実：{item.get('summary_1', '')}</li>
+                <li><b>事実：</b>{item.get('summary_1', '')}</li>
             """
-            if item.get("summary_2") and pd.notna(item["summary_2"]):
-                html += f"<li>事実：{item['summary_2']}</li>"
-            if item.get("summary_3") and pd.notna(item["summary_3"]):
-                html += f"<li>事実：{item['summary_3']}</li>"
+            if item.get("summary_2") and pd.notna(item["summary_2"]) and str(item["summary_2"]).strip() != "":
+                html += f"<li><b>事実：</b>{item['summary_2']}</li>"
+            if item.get("summary_3") and pd.notna(item["summary_3"]) and str(item["summary_3"]).strip() != "":
+                html += f"<li><b>事実：</b>{item['summary_3']}</li>"
                 
             html += f"""
               </ul>
               <div class="meta-line">
-                ソース: {item.get('source', '不明')} ｜ 関連アセット: <span style="color: #2962ff; font-weight:bold;">{item.get('related_tickers') if pd.notna(item.get('related_tickers')) else 'なし'}</span>
+                情報源: {item.get('source', '不明')} ｜ 関連アセット: <span style="color: #2962ff; font-weight:bold;">{item.get('related_tickers') if pd.notna(item.get('related_tickers')) and str(item.get('related_tickers')).strip() != "" else 'なし'}</span>
               </div>
             </div>
             """
@@ -115,7 +198,7 @@ def main():
     polymarket_articles = fetch_polymarket_odds()
     all_articles = raw_articles + polymarket_articles
 
-    # 既存のCSV内の既知URLをロードして「LLMの二重解析を防止（APIコスト削減）」
+    # 既存のCSV内の既知URLをロードして「LLMの二重解析を防止」
     existing_urls = set()
     if DB_CSV_PATH.exists():
         try:
@@ -131,7 +214,7 @@ def main():
     for idx, art in enumerate(all_articles, 1):
         clean_url = art["url"].strip()
         if clean_url in existing_urls:
-            continue  # すでにCSVに存在するものはスキップしてAPIを保護
+            continue  # 重複スキップ
 
         print(f"  ・新規解析中 [{idx}/{len(all_articles)}]: {art['title'][:25]}...")
         analysis = analyze_article_with_llm(art)
@@ -140,7 +223,7 @@ def main():
             art.update(analysis)
             analyzed_list.append(art)
             
-        time.sleep(1.0)  # Gemini API無料枠の制限を考慮した安全ウェイト
+        time.sleep(1.0)  # Gemini API無料枠の制限を考慮したウェイト
 
     # 3. CSVデータベースに新規マージ保存
     added_count = save_articles_to_csv(analyzed_list)
