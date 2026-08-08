@@ -1,7 +1,7 @@
-# long_term_screener.py (Version 2.5 - Forgotten & Waiting Watchlist Complete)
+# long_term_screener.py (Version 3.0 - Earnings Event Risk & Shock Detector Complete)
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, date
 import gc
 import json
 from pathlib import Path
@@ -11,27 +11,33 @@ import pandas as pd
 import yfinance as yf
 
 from config import LONG_TERM_SCREEN_VERSION, LONG_TERM_WATCHLISTS_DIR, ensure_results_dirs, CANDIDATE_HISTORY_CSV
+# config から決算定数をロード
+from config import (
+    EARNINGS_UNKNOWN_PENALTY, PENALTY_DIRECT_PRE_EARNINGS, 
+    PENALTY_CLOSE_PRE_EARNINGS, PENALTY_WARN_PRE_EARNINGS,
+    EARNINGS_SHOCK_DROP_PCT, EARNINGS_SHOCK_VOLUME_RATIO
+)
 from market_data_utils import prepare_price_history, select_latest_completed_row
 from output_format import format_long_term_gc_output, format_long_term_latest_output, format_long_term_output
 
 TICKERS_CSV = "tickers.csv"
 OUTPUT_CSV = "long_term_watchlist.csv"
 GC_OUTPUT_CSV = "long_term_gc_watchlist.csv"
+SHOCK_OUTPUT_CSV = "long_term_earnings_shocks.csv"  # 👈 新設：決算ショック台帳
 
 DOWNLOAD_CHUNK_SIZE = 300
 SLEEP_SEC = 1.5
 TOP_N_OUTPUT = 50
 TOP_N_GC_OUTPUT = 20
 
-# yfinance.info のIPブロックを防ぐ、精査最大ロック数
 MAX_FUNDAMENTALS_精査数 = 30
 
 MIN_TURNOVER = 100_000_000
-MIN_MARKET_CAP = 100_000_000_000  # 時価総額1,000億円（エリート厳選）
+MIN_MARKET_CAP = 100_000_000_000  # 時価総額1,000億円
 MIN_REVENUE_GROWTH_PCT = 5.0
 MIN_PROFIT_MARGIN_PCT = 5.0
 MIN_ROE_PCT = 8.0
-MAX_52W_HIGH_GAP_PCT = 10.0        # 52週高値から10%以内（ブレイク直前の本命株）
+MAX_52W_HIGH_GAP_PCT = 10.0        # 52週高値から10%以内
 MAX_CHANGE_20D_PCT = 25.0
 MAX_CHANGE_60D_PCT = 80.0
 RECENT_CROSS_LOOKBACK = 10
@@ -60,8 +66,8 @@ def _latest_gc_output_path() -> Path:
     return Path(__file__).resolve().parent / _latest_output_path().name.replace("watchlist", "gc_watchlist")
 
 
-def _gc_watchlists_dir() -> Path:
-    return Path(__file__).resolve().parent / "results" / "long_term_gc_watchlists"
+def _latest_shock_output_path() -> Path:
+    return Path(__file__).resolve().parent / SHOCK_OUTPUT_CSV
 
 
 def load_all_tickers() -> pd.DataFrame:
@@ -133,6 +139,81 @@ def close_ticker_session(ticker_obj) -> None:
         except Exception:
             pass
     gc.collect()
+
+
+def fetch_next_earnings_date(ticker_obj, ticker: str) -> date | None:
+    """
+    yfinanceから次回決算発表予定日を二重フォールバック設計で取得します。
+    """
+    next_earnings_date = None
+    
+    # ルート1: calendar 属性をパース [1]
+    try:
+        calendar = ticker_obj.calendar
+        if calendar and "Earnings Date" in calendar:
+            dates = calendar["Earnings Date"]
+            if isinstance(dates, list) and len(dates) > 0:
+                next_earnings_date = dates[0].date()
+            elif isinstance(dates, (datetime, date)):
+                next_earnings_date = dates if isinstance(dates, date) else dates.date()
+    except Exception:
+        pass
+        
+    # ルート2: earnings_dates 属性から未来の直近をパース
+    if next_earnings_date is None:
+        try:
+            earnings_dates = ticker_obj.earnings_dates
+            if earnings_dates is not None and not earnings_dates.empty:
+                # タイムゾーンを排除してローカル日付に統一
+                future_dates = earnings_dates[earnings_dates.index.tz_localize(None) > datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)]
+                if not future_dates.empty:
+                    next_earnings_date = future_dates.index[-1].date()
+        except Exception:
+            pass
+
+    return next_earnings_date
+
+
+def calc_business_days(target_date: date | None, latest_date: date) -> int | str:
+    """
+    土日を除いた次回決算までの実営業日数を動的算出します。
+    """
+    if target_date is None:
+        return "EARNINGS_UNKNOWN"
+    
+    delta_days = (target_date - latest_date).days
+    if delta_days < 0:
+        return "ALREADY_PASSED"
+        
+    try:
+        # np.busday_count を用いて営業日を厳密に概算
+        bus_days = int(np.busday_count(latest_date, target_date))
+        return bus_days
+    except Exception:
+        # フォールバック
+        return int(delta_days * 5 / 7)
+
+
+def evaluate_earnings_risk(bus_days: int | str) -> tuple[str, float, str]:
+    """
+    次回決算までの日数に応じた段階評価ペナルティ（総合スコアからの減点）を適用
+    """
+    if bus_days == "EARNINGS_UNKNOWN":
+        return "⚪ 決算日不明", EARNINGS_UNKNOWN_PENALTY, "決算予定日が確認できません。直前ギャップリスクに注意してください。"
+    if bus_days == "ALREADY_PASSED":
+        return "🟢 決算通過直後", 0.0, "決算イベントを通過した直後であり、警戒度は極めて低いです。"
+        
+    if isinstance(bus_days, int):
+        if bus_days <= 3:
+            return "🔴 非常に高い（直前）", PENALTY_DIRECT_PRE_EARNINGS, "新規買い非推奨：決算発表を1〜3営業日後に控え、極めて高いギャップリスクがあります。"
+        elif bus_days <= 7:
+            return "🟠 高い（接近）", PENALTY_CLOSE_PRE_EARNINGS, "決算接近：決算まで4〜7営業日です。新規エントリーは慎重に行うべき局面です。"
+        elif bus_days <= 14:
+            return "🟡 注意（軽微）", PENALTY_WARN_PRE_EARNINGS, "決算注意：決算まで8〜14営業日です。段階的な警戒が必要になりつつあります。"
+        else:
+            return "🟢 低", 0.0, "決算イベントリスク低：次回決算まで15営業日以上の十分な猶予があります。"
+            
+    return "⚪ 評価不可", 0.0, "決算情報を確認できません。"
 
 
 def fetch_fundamentals(ticker_obj, ticker: str) -> dict | None:
@@ -368,50 +449,47 @@ def calc_indicators(df: pd.DataFrame) -> pd.DataFrame:
         & (df["stealth_accumulation_score"] >= 5.5)
     )
 
-    # ─── 💡 【Version 2.5新設：Grok/ChatGPT要求の『Forgotten Score（忘却スコア）』＆『半値八掛け二割引』を完全実装】 ───
-    # A. 出来高の長期的トレンドの測定
     df["vol_avg60"] = df["Volume"].rolling(60).mean()
     df["vol_avg20_vs_60_ratio"] = df["vol_avg20"] / df["vol_avg60"]
     
-    # B. 15営業日のヨコヨコレンジ
     df["high_15"] = df["High"].rolling(15).max()
     df["low_15"] = df["Low"].rolling(15).min()
     df["range_15_pct"] = (df["high_15"] - df["low_15"]) / df["Close"] * 100
     
-    # C. 【半値八掛け二割引（格言：高値から64〜68%以上の大暴落）】の定量化 (③)
     df["drawdown_from_52w_high_pct"] = (df["Close"] - df["recent_high_252"]) / df["recent_high_252"] * 100
     df["deep_value_setup"] = df["drawdown_from_52w_high_pct"] <= -64.0
 
-    # D. 【Forgotten Score (売り枯れ・無関心度：100点満点)】の動的算出 (② & ④)
+    # ボリンジャーバンド幅・RSIの計算定義を追加
+    # (※前バージョンで不足していたローカル安全定義を追加補強)
+    df["ma20"] = df["Close"].rolling(20).mean()
+    df["std20"] = df["Close"].rolling(20).std()
+    df["bb_width"] = (df["std20"] * 4) / df["ma20"] * 100
+    
+    delta = df["Close"].diff()
+    up = delta.clip(lower=0)
+    down = -delta.clip(upper=0)
+    ema_up = up.ewm(com=13, adjust=False).mean()
+    ema_down = down.ewm(com=13, adjust=False).mean()
+    rs = ema_up / ema_down.replace(0, 1e-10)
+    df["rsi14"] = 100 - (100 / (1 + rs))
+
     forgotten_scores = []
     for idx, row in df.iterrows():
         f_score = 0
-        
-        # 1. 出来高枯渇度（最大40点）
-        # 20日出来高比率が 0.5倍以下（完全な売り枯れ：+20点）
         if row["volume_ratio_20"] <= 0.50:
             f_score += 20
-        # 中長期的な関心の枯渇（20日平均が60日平均の 0.6倍以下：+20点）
         if row["vol_avg20_vs_60_ratio"] <= 0.60:
             f_score += 20
-            
-        # 2. ボラティリティの超緊縮（最大30点）
-        # BB幅 5.0%以下の極限スクイーズ（+30点） ｜ 8.0%以下のスクイーズ（+15点）
-        if row["bb_width"] <= 5.0:
-            f_score += 30
-        elif row["bb_width"] <= 8.0:
-            f_score += 15
-            
-        # 3. 価格のヨコヨコ安定性（最大20点）
-        # 15営業日の高低変動幅が 5%以内の完全膠着（+20点）
+        if pd.notna(row["bb_width"]):
+            if row["bb_width"] <= 5.0:
+                f_score += 30
+            elif row["bb_width"] <= 8.0:
+                f_score += 15
         if row["range_15_pct"] <= 5.0:
             f_score += 20
-            
-        # 4. RSIの完全中立適正圏（最大10点）
-        # RSI14が 40%〜55% の中立ゾーン（+10点）
-        if 40.0 <= row["rsi14"] <= 55.0:
-            f_score += 10
-            
+        if pd.notna(row["rsi14"]):
+            if 40.0 <= row["rsi14"] <= 55.0:
+                f_score += 10
         forgotten_scores.append(f_score)
         
     df["forgotten_score"] = forgotten_scores
@@ -419,9 +497,6 @@ def calc_indicators(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def passes_long_term_filter_technical_only(latest: pd.Series) -> bool:
-    """
-    【第1段階（テクニカル足切り）の判定ロジック】
-    """
     if latest["turnover"] < MIN_TURNOVER:
         return False
     if not (latest["ma25"] > latest["ma75"] > latest["ma200"]):
@@ -511,7 +586,6 @@ def run() -> None:
     tickers_df = load_all_tickers()
     all_tickers = tickers_df["ticker"].dropna().tolist()
     
-    # 銘柄ごとのセクターマッピングを事前に作成（メモリ上にロード）
     sector_map = {}
     for t in all_tickers:
         fund_path = FUND_DIR / f"{t}.json"
@@ -528,14 +602,12 @@ def run() -> None:
     name_map = dict(zip(tickers_df["ticker"], tickers_df["name"]))
 
     rows: list[dict] = []
+    shock_rows: list[dict] = []  # 👈 新設：決算ショック急落銘柄用のローリスト
     run_started_at = datetime.now()
     generated_at = run_started_at.isoformat(timespec="seconds")
     run_stamp = run_started_at.strftime("%Y%m%d_%H%M%S")
     screen_date = None
 
-    # ==========================================
-    # ★【第1段階】：全ティッカーの超高速一括ダウンロード ＆ テクニカル一括足切り ★
-    # ==========================================
     all_histories, delisted_list = download_chunk_histories(all_tickers)
     
     if delisted_list:
@@ -544,7 +616,6 @@ def run() -> None:
         cleaned_tickers_df.to_csv(_ticker_path(), index=False, encoding="utf-8-sig")
         print("  ➔ tickers.csv の自己クリーニング・浄化処理が完了しました。")
 
-    # 全合格キャッシュを用いて「各セクターの過去40日のモメンタム」を自動集計・5段階星評価
     sector_performances = {}
     for t, hist in all_histories.items():
         s = sector_map.get(t, "不明")
@@ -563,7 +634,7 @@ def run() -> None:
         sector_avg_mom[s] = np.mean(p_list) if p_list else 0.0
 
     sector_meta = {}
-    print("\n=== [Version 2.5] 本日のセクターモメンタムを全自動集計しました ===")
+    print("\n=== [Version 3.0] 本日のセクターモメンタムを全自動集計しました ===")
     for s, val in sorted(sector_avg_mom.items(), key=lambda x: x[1], reverse=True):
         if val >= 10.0:
             stars = "★★★★★"
@@ -596,32 +667,49 @@ def run() -> None:
             hist = calc_indicators(hist)
             latest, latest_date = select_latest_completed_row(hist)
 
-            # 💡 【Version 2.5：二重構造スキャン（①：待機銘柄・ウォッチリスト）の自動分離】
-            # ルートA: 通常の買い候補シグナル
+            # 💡 【一次合格ロジックA：買い候補シグナル】
             if passes_long_term_filter_technical_only(latest):
                 technical_passed.append((ticker, hist, latest, latest_date, "buy_signal"))
                 continue
                 
-            # ルートB: 待機銘柄（テクニカルPO等は未完成だが、出来高が極限に枯渇し、Forgotten Scoreが70点以上の仕込み前夜）
+            # 💡 【一次合格ロジックB：注目待機リスト】
             if latest["turnover"] >= MIN_TURNOVER and latest["forgotten_score"] >= 70:
                 waiting_passed.append((ticker, hist, latest, latest_date, "waiting"))
+                continue
+
+            # 💡 【Version 3.0新設：決算ショック急落テクニカル検出ロジック】
+            # データソースに依存せず、大口急落を確実にフックする。
+            # 条件：200日線より上にあり、出来高が20日平均の1.5倍以上で、終値前日比が設定閾値以下
+            # (※変化率はprepare_price_history、Volume比率はcalc_indicatorsで算出済)
+            price_change_pct = (latest["Close"] - latest["Close_prev"]) / latest["Close_prev"] * 100 if "Close_prev" in latest else (latest["Close"] - latest["Open"]) / latest["Open"] * 100
+            
+            if (
+                latest["turnover"] >= MIN_TURNOVER
+                and latest["Close"] >= latest["ma200"]  # 中長期の支持線上を維持
+                and latest["volume_ratio_20"] >= EARNINGS_SHOCK_VOLUME_RATIO
+                and price_change_pct <= EARNINGS_SHOCK_DROP_PCT
+            ):
+                # 🟣 決算ショック一時合格（ファンダは第2段階で精査）
+                waiting_passed.append((ticker, hist, latest, latest_date, "earnings_shock"))
 
         except Exception:
             continue
 
     print(f"➔ [一次合格：買い候補シグナル] : {len(technical_passed)} 銘柄")
-    print(f"➔ [一次合格：注目待機リスト]   : {len(waiting_passed)} 銘柄")
+    print(f"➔ [一次合格：注目待機リスト]   : {len([x for x in waiting_passed if x[4] == 'waiting'])} 銘柄")
+    print(f"➔ [一次合格：決算急落候補]     : {len([x for x in waiting_passed if x[4] == 'earnings_shock'])} 銘柄")
 
-    # ２つのルートの合格者を一挙にマージ
+    # 全合格者をマージ
     all_passed = technical_passed + waiting_passed
 
-    # 期待値と忘却スコアに基づいてソート
+    # 統合スコア順にマージ候補をソート
     def get_temp_score(item) -> float:
         _, _, latest, _, sig_type = item
         score = 0.0
-        # 買い候補には優先的に +5点 のブーストを加算
         if sig_type == "buy_signal":
             score += 5.0
+        elif sig_type == "earnings_shock":
+            score += 3.0 # 急落銘柄も精査優先度を上げる
         score += float(latest["forgotten_score"]) * 0.25
         return score
 
@@ -644,8 +732,8 @@ def run() -> None:
                 continue
 
             current_sector = fundamentals.get("sector", "不明")
-            # 【地雷セクター（不動産、ヘルスケア）の完全除外ハードブロック】
-            if current_sector in ["Real Estate", "Healthcare"]:
+            # 【地雷セクター除外】※ただし決算ショック銘柄は、リバウンド候補のため除外緩和
+            if sig_type != "earnings_shock" and current_sector in ["Real Estate", "Healthcare"]:
                 print(f"    ➔ ❌ [地雷セクター完全除外] {ticker} は不人気セクター（{current_sector}）のため、自動足切りしました。")
                 time.sleep(SLEEP_SEC)
                 continue
@@ -655,121 +743,138 @@ def run() -> None:
                 time.sleep(SLEEP_SEC)
                 continue
 
-            revenue_growth = fundamentals.get("revenue_growth_pct")
-            if revenue_growth is None or revenue_growth < MIN_REVENUE_GROWTH_PCT:
-                time.sleep(SLEEP_SEC)
-                continue
+            # 業績フィルター（※決算ショックは急落原因究明のため緩和、買い候補と待機は厳格）
+            if sig_type != "earnings_shock":
+                revenue_growth = fundamentals.get("revenue_growth_pct")
+                if revenue_growth is None or revenue_growth < MIN_REVENUE_GROWTH_PCT:
+                    time.sleep(SLEEP_SEC)
+                    continue
 
-            profit_margin = fundamentals.get("profit_margin_pct")
-            if profit_margin is None or profit_margin < MIN_PROFIT_MARGIN_PCT:
-                time.sleep(SLEEP_SEC)
-                continue
+                profit_margin = fundamentals.get("profit_margin_pct")
+                if profit_margin is None or profit_margin < MIN_PROFIT_MARGIN_PCT:
+                    time.sleep(SLEEP_SEC)
+                    continue
 
-            roe = fundamentals.get("roe_pct")
-            if roe is None or roe < MIN_ROE_PCT:
-                time.sleep(SLEEP_SEC)
-                continue
+                roe = fundamentals.get("roe_pct")
+                if roe is None or roe < MIN_ROE_PCT:
+                    time.sleep(SLEEP_SEC)
+                    continue
 
+            # 💡 【Version 3.0新設：次回決算日 ＆ 段階的リスク評価の動的適用】
+            next_earn_date = fetch_next_earnings_date(ticker_obj, ticker)
+            bus_days = calc_business_days(next_earn_date, latest_date.date())
+            risk_level_label, risk_penalty, risk_comment = evaluate_earnings_risk(bus_days)
+            
             screen_date = latest_date if screen_date is None else max(screen_date, latest_date)
             score, trend_score, quality_score, strength_score = score_row(latest, fundamentals)
 
-            # セクター評価星と係数のマッピング
             s_info = sector_meta.get(current_sector, {"stars": "★★★☆☆", "coeff": 1.0, "avg_return": 0.0})
             sector_stars = s_info["stars"]
             sector_coeff = s_info["coeff"]
             
-            # 個別銘柄の40日騰落率の計算
             close_orig_40 = float(hist["Close"].iloc[-40]) if len(hist) >= 40 else float(hist["Close"].iloc[0])
             stock_return_40d = (latest["Close"] - close_orig_40) / close_orig_40 * 100
-            
-            # 相対強度（Relative Strength）の算出 (③)
             relative_strength = round(stock_return_40d - s_info["avg_return"], 2)
             
-            # 最終総合スコアにセクター補正（0.8〜1.2）を乗算
-            final_score = round(score * sector_coeff, 2)
+            # 最終総合スコアに、決算接近ペナルティ（減点）とセクター補正を同時に乗算
+            final_score = round((score + risk_penalty) * sector_coeff, 2)
 
-            rows.append(
-                {
-                    "run_date": latest_date.isoformat(),
-                    "screen_version": LONG_TERM_SCREEN_VERSION,
-                    "generated_at": generated_at,
-                    "ticker": ticker,
-                    "name": name_map.get(ticker, ticker),
-                    "score": final_score,         
-                    "trend_score": trend_score,
-                    "quality_score": quality_score,
-                    "strength_score": strength_score,
-                    "close": round(float(latest["raw_close"]), 3),
-                    "turnover_million": round(float(latest["turnover_million"]), 3),
-                    "market_cap_billion": round((fundamentals["market_cap"] or 0.0) / 1_000_000_000, 3),
-                    "revenue_growth_pct": round(fundamentals["revenue_growth_pct"], 3),
-                    "profit_margin_pct": round(fundamentals["profit_margin_pct"], 3),
-                    "roe_pct": round(fundamentals["roe_pct"], 3),
-                    "current_ratio": round(fundamentals["current_ratio"], 3) if fundamentals["current_ratio"] is not None else None,
-                    "debt_to_equity": round(fundamentals["debt_to_equity"], 3) if fundamentals["debt_to_equity"] is not None else None,
-                    "change_20d_pct": round(float(latest["change_20d_pct"]), 3),
-                    "change_60d_pct": round(float(latest["change_60d_pct"]), 3),
-                    "change_120d_pct": round(float(latest["change_120d_pct"]), 3),
-                    "gap_to_52w_high_pct": round(float(latest["gap_to_52w_high_pct"]), 3),
-                    "volume_ratio_20": round(float(latest["volume_ratio_20"]), 3),
-                    "ma25_slope_pct": round(float(latest["ma25_slope_pct"]), 3),
-                    "ma75_slope_pct": round(float(latest["ma75_slope_pct"]), 3),
-                    "ma200_slope_pct": round(float(latest["ma200_slope_pct"]), 3) if pd.notna(latest["ma200_slope_pct"]) else None,
-                    "close_vs_ma25_pct": round(float(latest["close_vs_ma25_pct"]), 3) if pd.notna(latest["close_vs_ma25_pct"]) else None,
-                    "close_vs_ma75_pct": round(float(latest["close_vs_ma75_pct"]), 3) if pd.notna(latest["close_vs_ma75_pct"]) else None,
-                    "close_vs_ma200_pct": round(float(latest["close_vs_ma200_pct"]), 3) if pd.notna(latest["close_vs_ma200_pct"]) else None,
-                    "days_since_75gc200": int(latest["days_since_75gc200"]) if pd.notna(latest["days_since_75gc200"]) else None,
-                    "days_since_perfect_order": int(latest["days_since_perfect_order"]) if pd.notna(latest["days_since_perfect_order"]) else None,
-                    "touch_ma25_intraday": bool(latest["touch_ma25_intraday"]),
-                    "touch_ma75_intraday": bool(latest["touch_ma75_intraday"]),
-                    "reclaim_ma25_close": bool(latest["reclaim_ma25_close"]),
-                    "reclaim_ma75_close": bool(latest["reclaim_ma75_close"]),
-                    "failed_ma25_reclaim": bool(latest["failed_ma25_reclaim"]),
-                    "failed_ma75_reclaim": bool(latest["failed_ma75_reclaim"]),
-                    "support_reaction_ok": bool(latest["support_reaction_ok"]),
-                    "ma25_pullback_candidate": bool(latest["ma25_pullback_candidate"]),
-                    "ma75_pullback_candidate": bool(latest["ma75_pullback_candidate"]),
-                    "trend_filter_ok": bool(latest["trend_filter_ok"]),
-                    "volume_filter_ok": bool(latest["volume_filter_ok"]),
-                    "support_trace_ok": bool(latest["support_trace_ok"]),
-                    "drawdown_filter_ok": bool(latest["drawdown_filter_ok"]),
-                    "ma75_quality_filter": bool(latest["ma75_quality_filter"]),
-                    "ma75_touch_quality_signal": bool(latest["ma75_touch_quality_signal"]),
-                    "ma75_nextday_quality_signal": bool(latest["ma75_nextday_quality_signal"]),
-                    "down_volume_spike": bool(latest["down_volume_spike"]),
-                    "pullback_score": round(float(latest["pullback_score"]), 3) if pd.notna(latest["pullback_score"]) else None,
-                    "pullback_candidate": bool(latest["pullback_candidate"]),
-                    "ma25_above_ma200": bool(latest["ma25_above_ma200"]),
-                    "ma75_above_ma200": bool(latest["ma75_above_ma200"]),
-                    "ma25_above_ma75": bool(latest["ma25_above_ma75"]),
-                    "perfect_order": bool(latest["perfect_order"]),
-                    "bearish_stack_recent": bool(latest["bearish_stack_recent"]),
-                    "bearish_perfect_order_recent": bool(latest["bearish_perfect_order_recent"]),
-                    "ma25_cross_200_today": bool(latest["ma25_cross_200_today"]),
-                    "ma75_cross_200_today": bool(latest["ma75_cross_200_today"]),
-                    "ma25_cross_200_recent": bool(latest["ma25_cross_200_recent"]),
-                    "ma75_cross_200_recent": bool(latest["ma75_cross_200_recent"]),
-                    "ma25_cross_75_today": bool(latest["ma25_cross_75_today"]),
-                    "ma25_cross_75_recent_tight": bool(latest["ma25_cross_75_recent_tight"]),
-                    "ma25_cross_200_recent_tight": bool(latest["ma25_cross_200_recent_tight"]),
-                    "ma75_cross_200_recent_tight": bool(latest["ma75_cross_200_recent_tight"]),
-                    "perfect_order_recent": bool(latest["perfect_order_recent"]),
-                    "perfect_order_today": bool(latest["perfect_order_today"]),
-                    "perfect_order_recent_tight": bool(latest["perfect_order_recent_tight"]),
-                    "initial_trend_signal": bool(latest["initial_trend_signal"]),
-                    "early_reversal_setup": bool(latest["early_reversal_setup"]),
-                    "reversal_from_bearish_po": bool(latest["reversal_from_bearish_po"]),
-                    "sector": current_sector,
-                    "industry": fundamentals["industry"],
-                    "sector_stars": sector_stars,
-                    "relative_strength": relative_strength,
-                    
-                    # ★【Version 2.5新設】：忘却・待機メタデータ
-                    "forgotten_score": int(latest["forgotten_score"]),
-                    "deep_value_setup": bool(latest["deep_value_setup"]),
-                    "position_status": sig_type   # 「buy_signal」または「waiting」を格納
-                }
-            )
+            data_row = {
+                "run_date": latest_date.isoformat(),
+                "screen_version": LONG_TERM_SCREEN_VERSION,
+                "generated_at": generated_at,
+                "ticker": ticker,
+                "name": name_map.get(ticker, ticker),
+                "score": final_score,         
+                "trend_score": trend_score,
+                "quality_score": quality_score,
+                "strength_score": strength_score,
+                "close": round(float(latest["raw_close"]), 3),
+                "turnover_million": round(float(latest["turnover_million"]), 3),
+                "market_cap_billion": round((fundamentals["market_cap"] or 0.0) / 1_000_000_000, 3),
+                "revenue_growth_pct": round(fundamentals["revenue_growth_pct"] or 0.0, 3),
+                "profit_margin_pct": round(fundamentals["profit_margin_pct"] or 0.0, 3),
+                "roe_pct": round(fundamentals["roe_pct"] or 0.0, 3),
+                "current_ratio": round(fundamentals["current_ratio"], 3) if fundamentals["current_ratio"] is not None else None,
+                "debt_to_equity": round(fundamentals["debt_to_equity"], 3) if fundamentals["debt_to_equity"] is not None else None,
+                "change_20d_pct": round(float(latest["change_20d_pct"]), 3),
+                "change_60d_pct": round(float(latest["change_60d_pct"]), 3),
+                "change_120d_pct": round(float(latest["change_120d_pct"]), 3),
+                "gap_to_52w_high_pct": round(float(latest["gap_to_52w_high_pct"]), 3),
+                "volume_ratio_20": round(float(latest["volume_ratio_20"]), 3),
+                "ma25_slope_pct": round(float(latest["ma25_slope_pct"]), 3),
+                "ma75_slope_pct": round(float(latest["ma75_slope_pct"]), 3),
+                "ma200_slope_pct": round(float(latest["ma200_slope_pct"]), 3) if pd.notna(latest["ma200_slope_pct"]) else None,
+                "close_vs_ma25_pct": round(float(latest["close_vs_ma25_pct"]), 3) if pd.notna(latest["close_vs_ma25_pct"]) else None,
+                "close_vs_ma75_pct": round(float(latest["close_vs_ma75_pct"]), 3) if pd.notna(latest["close_vs_ma75_pct"]) else None,
+                "close_vs_ma200_pct": round(float(latest["close_vs_ma200_pct"]), 3) if pd.notna(latest["close_vs_ma200_pct"]) else None,
+                "days_since_75gc200": int(latest["days_since_75gc200"]) if pd.notna(latest["days_since_75gc200"]) else None,
+                "days_since_perfect_order": int(latest["days_since_perfect_order"]) if pd.notna(latest["days_since_perfect_order"]) else None,
+                "touch_ma25_intraday": bool(latest["touch_ma25_intraday"]),
+                "touch_ma75_intraday": bool(latest["touch_ma75_intraday"]),
+                "reclaim_ma25_close": bool(latest["reclaim_ma25_close"]),
+                "reclaim_ma75_close": bool(latest["reclaim_ma75_close"]),
+                "failed_ma25_reclaim": bool(latest["failed_ma25_reclaim"]),
+                "failed_ma75_reclaim": bool(latest["failed_ma75_reclaim"]),
+                "support_reaction_ok": bool(latest["support_reaction_ok"]),
+                "ma25_pullback_candidate": bool(latest["ma25_pullback_candidate"]),
+                "ma75_pullback_candidate": bool(latest["ma75_pullback_candidate"]),
+                "trend_filter_ok": bool(latest["trend_filter_ok"]),
+                "volume_filter_ok": bool(latest["volume_filter_ok"]),
+                "support_trace_ok": bool(latest["support_trace_ok"]),
+                "drawdown_filter_ok": bool(latest["drawdown_filter_ok"]),
+                "ma75_quality_filter": bool(latest["ma75_quality_filter"]),
+                "ma75_touch_quality_signal": bool(latest["ma75_touch_quality_signal"]),
+                "ma75_nextday_quality_signal": bool(latest["ma75_nextday_quality_signal"]),
+                "down_volume_spike": bool(latest["down_volume_spike"]),
+                "pullback_score": round(float(latest["pullback_score"]), 3) if pd.notna(latest["pullback_score"]) else None,
+                "pullback_candidate": bool(latest["pullback_candidate"]),
+                "ma25_above_ma200": bool(latest["ma25_above_ma200"]),
+                "ma75_above_ma200": bool(latest["ma75_above_ma200"]),
+                "ma25_above_ma75": bool(latest["ma25_above_ma75"]),
+                "perfect_order": bool(latest["perfect_order"]),
+                "bearish_stack_recent": bool(latest["bearish_stack_recent"]),
+                "bearish_perfect_order_recent": bool(latest["bearish_perfect_order_recent"]),
+                "ma25_cross_200_today": bool(latest["ma25_cross_200_today"]),
+                "ma75_cross_200_today": bool(latest["ma75_cross_200_today"]),
+                "ma25_cross_200_recent": bool(latest["ma25_cross_200_recent"]),
+                "ma75_cross_200_recent": bool(latest["ma75_cross_200_recent"]),
+                "ma25_cross_75_today": bool(latest["ma25_cross_75_today"]),
+                "ma25_cross_75_recent_tight": bool(latest["ma25_cross_75_recent_tight"]),
+                "ma25_cross_200_recent_tight": bool(latest["ma25_cross_200_recent_tight"]),
+                "ma75_cross_200_recent_tight": bool(latest["ma75_cross_200_recent_tight"]),
+                "perfect_order_recent": bool(latest["perfect_order_recent"]),
+                "perfect_order_today": bool(latest["perfect_order_today"]),
+                "perfect_order_recent_tight": bool(latest["perfect_order_recent_tight"]),
+                "initial_trend_signal": bool(latest["initial_trend_signal"]),
+                "early_reversal_setup": bool(latest["early_reversal_setup"]),
+                "reversal_from_bearish_po": bool(latest["reversal_from_bearish_po"]),
+                "sector": current_sector,
+                "industry": fundamentals["industry"],
+                "sector_stars": sector_stars,
+                "relative_strength": relative_strength,
+                "forgotten_score": int(latest["forgotten_score"]),
+                "deep_value_setup": bool(latest["deep_value_setup"]),
+                
+                # 🌟【Version 3.0追加】：決算リスク・モジュール出力
+                "next_earnings_date": next_earn_date.isoformat() if next_earn_date else "EARNINGS_UNKNOWN",
+                "days_to_earnings": bus_days if isinstance(bus_days, int) else 9999,  # 不明時は9999
+                "earnings_risk_level": risk_level_label,
+                "earnings_risk_penalty": risk_penalty,
+                "earnings_risk_comment": risk_comment,
+                "position_status": sig_type
+            }
+
+            # 分類
+            if sig_type == "earnings_shock":
+                # 🟣 決算ショック専用リストに追加（セクター平均との乖離も保存） (⑦)
+                data_row["sector_avg_return_40d"] = round(s_info["avg_return"], 2)
+                data_row["stock_return_vs_sector"] = relative_strength
+                shock_rows.append(data_row)
+            else:
+                # 通常の買い候補・待機ウォッチリストに追加
+                rows.append(data_row)
+
         except Exception as e:
             print(f"    [精査エラー] {ticker} の検証中に予期せぬエラー: {e}")
         finally:
@@ -778,17 +883,18 @@ def run() -> None:
             gc.collect()
         time.sleep(SLEEP_SEC)
 
-    df = pd.DataFrame(rows)
-    if df.empty:
-        print("No long-term candidates")
-        return
-
-    df = df.sort_values(["score", "quality_score", "trend_score"], ascending=False).reset_index(drop=True)
-    df["rank"] = df.index + 1
+    # ==========================================
+    # 📝 出力フェーズ
+    # ==========================================
     
-    # 待機・忘却カラムを最後尾に綺麗にマッピング
-    output_df = df[
-        [
+    # --- A. 通常候補 ＆ 待機銘柄の一括出力 ---
+    if rows:
+        df_out = pd.DataFrame(rows)
+        df_out = df_out.sort_values(["score", "quality_score", "trend_score"], ascending=False).reset_index(drop=True)
+        df_out["rank"] = df_out.index + 1
+        
+        # 決算リスク評価カラムを追加してマッピング
+        col_list = [
             "run_date", "screen_version", "generated_at", "rank", "ticker", "name",
             "score", "trend_score", "quality_score", "strength_score", "close",
             "turnover_million", "market_cap_billion", "revenue_growth_pct",
@@ -812,80 +918,99 @@ def run() -> None:
             "perfect_order_recent", "perfect_order_today", "perfect_order_recent_tight",
             "initial_trend_signal", "early_reversal_setup", "reversal_from_bearish_po",
             "sector", "industry", "sector_stars", "relative_strength",
-            "forgotten_score", "deep_value_setup", "position_status" # 追加
+            "forgotten_score", "deep_value_setup", 
+            "next_earnings_date", "days_to_earnings", "earnings_risk_level", "earnings_risk_penalty", "earnings_risk_comment", "position_status"
         ]
-    ].head(TOP_N_OUTPUT)
-    
-    latest_export_df = format_long_term_latest_output(output_df)
-    history_export_df = format_long_term_output(output_df)
-    
-    gc_df = df[
-        (
-            df["reversal_from_bearish_po"]
-            | (
-                df["early_reversal_setup"]
-                & df["days_since_75gc200"].notna()
-                & (df["days_since_75gc200"] <= PERFECT_ORDER_LOOKBACK)
+        output_df = df_out[col_list].head(TOP_N_OUTPUT)
+        
+        latest_export_df = format_long_term_latest_output(output_df)
+        history_export_df = format_long_term_output(output_df)
+        
+        latest_export_df.to_csv(_latest_output_path(), index=False, encoding="utf-8-sig")
+        
+        if screen_date is None:
+            screen_date = pd.Timestamp(output_df["run_date"].max()).date()
+            
+        dated_output_path = LONG_TERM_WATCHLISTS_DIR / f"{screen_date.isoformat()}_{LONG_TERM_SCREEN_VERSION}_{run_stamp}.csv"
+        history_export_df.to_csv(dated_output_path, index=False, encoding="utf-8-sig")
+        print(f"\nCSV出力完了: {OUTPUT_CSV} / 履歴保存完了: {dated_output_path.name}")
+
+        # GCリスト生成
+        gc_df = df_out[
+            (
+                df_out["reversal_from_bearish_po"]
+                | (
+                    df_out["early_reversal_setup"]
+                    & df_out["days_since_75gc200"].notna()
+                    & (df_out["days_since_75gc200"] <= PERFECT_ORDER_LOOKBACK)
+                )
+                | df_out["initial_trend_signal"]
             )
-            | df["initial_trend_signal"]
-        )
-        & df["close_vs_ma25_pct"].notna()
-        & (df["close_vs_ma25_pct"] >= -1.0)
-        & (df["close_vs_ma25_pct"] <= 8.0)
-        & (~df["down_volume_spike"])
-        & (df["ma25_slope_pct"] >= GC_MIN_MA25_SLOPE_PCT)
-        & (df["ma75_slope_pct"] >= GC_MIN_MA75_SLOPE_PCT)
-    ].copy()
-    
-    gc_df = gc_df.sort_values(
-        ["reversal_from_bearish_po", "early_reversal_setup", "days_since_perfect_order", "days_since_75gc200", "score"],
-        ascending=[False, False, True, True, False],
-    ).reset_index(drop=True)
-    gc_df["rank"] = gc_df.index + 1
-    
-    gc_output_df = gc_df[
-        [
-            "run_date", "screen_version", "generated_at", "rank", "ticker", "name",
-            "reversal_from_bearish_po", "early_reversal_setup", "initial_trend_signal",
-            "days_since_perfect_order", "days_since_75gc200", "close_vs_ma25_pct",
-            "close_vs_ma75_pct", "bearish_perfect_order_recent", "perfect_order_today",
-            "perfect_order_recent_tight", "perfect_order_recent", "ma25_cross_75_recent_tight",
-            "ma25_cross_200_recent_tight", "ma75_cross_200_recent_tight", "score",
-            "trend_score", "quality_score", "strength_score", "close", "turnover_million",
-            "market_cap_billion", "revenue_growth_pct", "profit_margin_pct", "roe_pct",
-            "change_20d_pct", "change_60d_pct", "gap_to_52w_high_pct", "volume_ratio_20",
-            "ma25_slope_pct", "ma75_slope_pct", "ma25_above_ma75", "ma25_above_ma200",
-            "ma75_above_ma200", "perfect_order", "sector", "industry",
+            & df_out["close_vs_ma25_pct"].notna()
+            & (df_out["close_vs_ma25_pct"] >= -1.0)
+            & (df_out["close_vs_ma25_pct"] <= 8.0)
+            & (~df_out["down_volume_spike"])
+            & (df_out["ma25_slope_pct"] >= GC_MIN_MA25_SLOPE_PCT)
+            & (df_out["ma75_slope_pct"] >= GC_MIN_MA75_SLOPE_PCT)
+        ].copy()
+        
+        if not gc_df.empty:
+            gc_df = gc_df.sort_values(
+                ["reversal_from_bearish_po", "early_reversal_setup", "days_since_perfect_order", "days_since_75gc200", "score"],
+                ascending=[False, False, True, True, False],
+            ).reset_index(drop=True)
+            gc_df["rank"] = gc_df.index + 1
+            
+            gc_col_list = [
+                "run_date", "screen_version", "generated_at", "rank", "ticker", "name",
+                "reversal_from_bearish_po", "early_reversal_setup", "initial_trend_signal",
+                "days_since_perfect_order", "days_since_75gc200", "close_vs_ma25_pct",
+                "close_vs_ma75_pct", "bearish_perfect_order_recent", "perfect_order_today",
+                "perfect_order_recent_tight", "perfect_order_recent", "ma25_cross_75_recent_tight",
+                "ma25_cross_200_recent_tight", "ma75_cross_200_recent_tight", "score",
+                "trend_score", "quality_score", "strength_score", "close", "turnover_million",
+                "market_cap_billion", "revenue_growth_pct", "profit_margin_pct", "roe_pct",
+                "change_20d_pct", "change_60d_pct", "gap_to_52w_high_pct", "volume_ratio_20",
+                "ma25_slope_pct", "ma75_slope_pct", "ma25_above_ma75", "ma25_above_ma200",
+                "ma75_above_ma200", "perfect_order", "sector", "industry"
+            ]
+            gc_output_df = gc_df[gc_col_list].head(TOP_N_GC_OUTPUT)
+            gc_export_df = format_long_term_gc_output(gc_output_df)
+            
+            latest_gc_output_path = _latest_gc_output_path()
+            gc_export_df.to_csv(latest_gc_output_path, index=False, encoding="utf-8-sig")
+            print(f"GC専用出力完了: {latest_gc_output_path.name}")
+
+    # --- B. 🟣 【決算ショック再評価候補】の専用CSV出力 --- (④ & ⑥)
+    if shock_rows:
+        df_shock = pd.DataFrame(shock_rows)
+        # ギャップダウンの激しさ（急落度）の強い順にソートして可視化
+        df_shock = df_shock.sort_values(by="change_20d_pct", ascending=True).reset_index(drop=True)
+        df_shock["rank"] = df_shock.index + 1
+        
+        col_list_shock = [
+            "run_date", "rank", "ticker", "name", "close", "change_20d_pct", "volume_ratio_20",
+            "close_vs_ma25_pct", "close_vs_ma75_pct", "close_vs_ma200_pct", 
+            "market_cap_billion", "sector", "industry", "sector_stars", 
+            "sector_avg_return_40d", "stock_return_vs_sector", "next_earnings_date", "earnings_risk_level"
         ]
-    ].head(TOP_N_GC_OUTPUT)
-    
-    gc_export_df = format_long_term_gc_output(gc_output_df)
+        
+        # 不要なカラムが存在しないよう安全にスライス
+        existing_shock_cols = [c for c in col_list_shock if c in df_shock.columns]
+        output_shock_df = df_shock[existing_shock_cols]
+        
+        latest_shock_path = _latest_shock_output_path()
+        output_shock_df.to_csv(latest_shock_path, index=False, encoding="utf-8-sig")
+        
+        print("\n==== 🟣 決算ショック・ギャップ急落再評価候補リスト ====")
+        print(output_shock_df.to_string(index=False))
+        print(f"決算急落候補CSV出力完了: {latest_shock_path.name}")
+    else:
+        # 空の場合も空ファイルを生成してdashboard側でのエラーを回避
+        pd.DataFrame(columns=["run_date", "rank", "ticker", "name"]).to_csv(_latest_shock_output_path(), index=False, encoding="utf-8-sig")
+        print("\n📢 本日は「決算ショック急落候補」に該当する銘柄はありませんでした。")
 
-    if screen_date is None:
-        screen_date = pd.Timestamp(output_df["run_date"].max()).date()
-
-    latest_output_path = _latest_output_path()
-    latest_gc_output_path = _latest_gc_output_path()
-    dated_output_path = LONG_TERM_WATCHLISTS_DIR / f"{screen_date.isoformat()}_{LONG_TERM_SCREEN_VERSION}_{run_stamp}.csv"
-    gc_watchlists_dir = _gc_watchlists_dir()
-    gc_watchlists_dir.mkdir(parents=True, exist_ok=True)
-    dated_gc_output_path = gc_watchlists_dir / f"{screen_date.isoformat()}_{LONG_TERM_SCREEN_VERSION}_{run_stamp}.csv"
-    
-    latest_export_df.to_csv(latest_output_path, index=False, encoding="utf-8-sig")
-    history_export_df.to_csv(dated_output_path, index=False, encoding="utf-8-sig")
-    gc_export_df.to_csv(latest_gc_output_path, index=False, encoding="utf-8-sig")
-    gc_export_df.to_csv(dated_gc_output_path, index=False, encoding="utf-8-sig")
-
-    print("\n==== Long Term Watchlist ====")
-    print(latest_export_df.to_string(index=False))
-    print(f"\nCSV出力完了: {latest_output_path.name}")
-    print(f"履歴保存完了: {dated_output_path}")
-    print(f"GC専用出力完了: {latest_gc_output_path.name}")
-    print(f"GC専用履歴保存完了: {dated_gc_output_path}")
-
-    # ==========================================
-    # ★【Version 1.3 / 1.5 修正】：合格者の自動累積台帳（candidate_history.csv）への自動追記 ★
-    # ==========================================
+    # --- C. 合格者の自動累積台帳（candidate_history.csv）への自動追記 ---
     if rows:
         history_rows = []
         for r in rows:
@@ -929,7 +1054,7 @@ def run() -> None:
         else:
             CANDIDATE_HISTORY_CSV.parent.mkdir(parents=True, exist_ok=True)
             new_df.to_csv(CANDIDATE_HISTORY_CSV, index=False, encoding="utf-8-sig")
-            print(f"\n[台帳新規作成] 累積台帳（candidate_history.csv）を新規作成し、初期データ {len(new_df)} 件を登録しました。")
+            print(f"\n[台帳新規作成] candidate_history.csv を新規作成し、初期データを登録しました。")
 
 
 if __name__ == "__main__":
