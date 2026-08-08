@@ -105,6 +105,7 @@ jobs:
           path: |
             long_term_watchlist.csv
             long_term_gc_watchlist.csv
+            long_term_earnings_shocks.csv  # 👈 ★ここに追加
             long_term_tracking.csv
             tracked_tickers.csv
             universe_offset.txt
