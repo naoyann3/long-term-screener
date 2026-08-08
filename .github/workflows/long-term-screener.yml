@@ -77,8 +77,8 @@ jobs:
           git config --global user.name "github-actions[bot]"
           git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
           
-          # 1. ルート直下の更新ファイルをステージ
-          for file in long_term_watchlist.csv long_term_gc_watchlist.csv long_term_tracking.csv tracked_tickers.csv universe_offset.txt tickers.csv; do
+          # 1. ルート直下の更新ファイルをステージ（★末尾に新設CSVを追記）
+          for file in long_term_watchlist.csv long_term_gc_watchlist.csv long_term_tracking.csv tracked_tickers.csv universe_offset.txt tickers.csv long_term_earnings_shocks.csv; do
             if [ -f "$file" ]; then
               git add "$file"
             fi
@@ -92,7 +92,6 @@ jobs:
           # 3. 差分があればプッシュ
           if ! git diff --cached --quiet; then
             git commit -m "Auto-update daily long term screener data [skip ci]"
-            # 👇 【修正点】：origin master の指定を削除し、現在のブランチに安全にプッシュ
             git push
           else
             echo "No changes to commit"
