@@ -1,4 +1,4 @@
-# long_term_screener.py (Version 3.0 - Earnings Event Risk & Shock Detector Complete)
+# long_term_screener.py (Version 3.1 - Earnings Event Risk & Shock Detector Corrected)
 from __future__ import annotations
 
 from datetime import datetime, date
@@ -23,7 +23,7 @@ from output_format import format_long_term_gc_output, format_long_term_latest_ou
 TICKERS_CSV = "tickers.csv"
 OUTPUT_CSV = "long_term_watchlist.csv"
 GC_OUTPUT_CSV = "long_term_gc_watchlist.csv"
-SHOCK_OUTPUT_CSV = "long_term_earnings_shocks.csv"  # 👈 新設：決算ショック台帳
+SHOCK_OUTPUT_CSV = "long_term_earnings_shocks.csv"  # 新設：決算ショック台帳
 
 DOWNLOAD_CHUNK_SIZE = 300
 SLEEP_SEC = 1.5
