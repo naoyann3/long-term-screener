@@ -1,4 +1,4 @@
-# long_term_screener.py (Version 3.3 - Hybrid Dual-Path Earnings Shock 精査枠分離 ＆ 前日比計算バグ修正 ＆ GC履歴復元 Complete)
+# long_term_screener.py (Version 3.4 - Dual-Path Precision Screening V3.4 Complete)
 from __future__ import annotations
 
 from datetime import datetime, date
@@ -34,7 +34,7 @@ TOP_N_GC_OUTPUT = 20
 MAX_FUNDAMENTALS_精査数 = 30
 
 MIN_TURNOVER = 100_000_000
-MIN_MARKET_CAP = 100_000_000_000  # 時価総額1,000億円
+MIN_MARKET_CAP = 100_000_000_000  # 時価総額1,000億円 (通常枠)
 MIN_REVENUE_GROWTH_PCT = 5.0
 MIN_PROFIT_MARGIN_PCT = 5.0
 MIN_ROE_PCT = 8.0
@@ -158,7 +158,8 @@ def fetch_next_earnings_date(ticker_obj, ticker: str) -> date | None:
         if calendar and "Earnings Date" in calendar:
             dates = calendar["Earnings Date"]
             if isinstance(dates, list) and len(dates) > 0:
-                next_earnings_date = dates[0].date()
+                # 🌟 すでに date 型であればそのまま、datetime 型であれば .date() を呼ぶ安全設計
+                next_earnings_date = dates[0] if isinstance(dates[0], date) else dates[0].date()
             elif isinstance(dates, (datetime, date)):
                 next_earnings_date = dates if isinstance(dates, date) else dates.date()
     except Exception:
@@ -172,7 +173,9 @@ def fetch_next_earnings_date(ticker_obj, ticker: str) -> date | None:
                 # タイムゾーンを排除してローカル日付に統一
                 future_dates = earnings_dates[earnings_dates.index.tz_localize(None) > datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)]
                 if not future_dates.empty:
-                    next_earnings_date = future_dates.index[-1].date()
+                    # すでにインデックスが date 型または DatetimeIndex である場合に対応
+                    raw_d = future_dates.index[-1]
+                    next_earnings_date = raw_d if isinstance(raw_d, date) else raw_d.date()
         except Exception:
             pass
 
@@ -478,6 +481,9 @@ def calc_indicators(df: pd.DataFrame) -> pd.DataFrame:
     rs = ema_up / ema_down.replace(0, 1e-10)
     df["rsi14"] = 100 - (100 / (1 + rs))
 
+    # 🌟【Version 3.3 修正】：前日比騰落率（終値ベース）を計算
+    df["change_1d_pct"] = (df["Close"] - df["Close"].shift(1)) / df["Close"].shift(1) * 100
+
     forgotten_scores = []
     for idx, row in df.iterrows():
         f_score = 0
@@ -682,11 +688,8 @@ def run() -> None:
                 waiting_passed.append((ticker, hist, latest, latest_date, "waiting"))
                 continue
 
-            # 💡 【Version 3.0新設：決算ショック急落テクニカル検出ロジック】
-            # データソースに依存せず、大口急落を確実にフックする。
-            # 条件：200日線より上にあり、出来高が20日平均の1.5倍以上で、終値前日比が設定閾値以下
-            # (※変化率はprepare_price_history、Volume比率はcalc_indicatorsで算出済)
-            price_change_pct = (latest["Close"] - latest["Close_prev"]) / latest["Close_prev"] * 100 if "Close_prev" in latest else (latest["Close"] - latest["Open"]) / latest["Open"] * 100
+            # 💡 【Version 3.3 修正】：前日比下落率（終値ベース）を正確に参照
+            price_change_pct = latest["change_1d_pct"] if "change_1d_pct" in latest else (latest["Close"] - latest["Open"]) / latest["Open"] * 100
             
             if (
                 latest["turnover"] >= MIN_TURNOVER
@@ -704,24 +707,37 @@ def run() -> None:
     print(f"➔ [一次合格：注目待機リスト]   : {len([x for x in waiting_passed if x[4] == 'waiting'])} 銘柄")
     print(f"➔ [一次合格：決算急落候補]     : {len([x for x in waiting_passed if x[4] == 'earnings_shock'])} 銘柄")
 
-    # 全合格者をマージ
-    all_passed = technical_passed + waiting_passed
-
-    # 統合スコア順にマージ候補をソート
-    def get_temp_score(item) -> float:
+    # === [Version 3.3 修正：通常枠と決算ショック枠を明確に分離して精査] ===
+    # 1. 通常候補 (buy_signal ＆ waiting) をスコア順に上位30件に絞る
+    normal_candidates = technical_passed + [x for x in waiting_passed if x[4] == "waiting"]
+    
+    def get_normal_temp_score(item) -> float:
         _, _, latest, _, sig_type = item
         score = 0.0
         if sig_type == "buy_signal":
             score += 5.0
-        elif sig_type == "earnings_shock":
-            score += 3.0 # 急落銘柄も精査優先度を上げる
         score += float(latest["forgotten_score"]) * 0.25
         return score
 
-    all_passed.sort(key=get_temp_score, reverse=True)
-    all_passed_limited = all_passed[:MAX_FUNDAMENTALS_精査数]
+    normal_candidates.sort(key=get_normal_temp_score, reverse=True)
+    normal_candidates_limited = normal_candidates[:MAX_FUNDAMENTALS_精査数]
 
-    print(f"➔ [厳選リミッター作動]: 統合合格 {len(all_passed)} 銘柄から、スコア上位 {len(all_passed_limited)} 銘柄に精査対象を絞り込みました。")
+    # 2. 決算ショック候補 (earnings_shock) を下落率が激しい順にソートし、最大15件に絞る
+    shock_candidates = [x for x in waiting_passed if x[4] == "earnings_shock"]
+    
+    def get_shock_temp_score(item) -> float:
+        _, _, latest, _, _ = item
+        val = latest["change_1d_pct"] if "change_1d_pct" in latest else 0.0
+        return -val # 下落が激しいほどマイナス値が大きいため、-を掛けてソート上位にする
+
+    # 下落率が激しい順にソート
+    shock_candidates.sort(key=get_shock_temp_score, reverse=True)
+    shock_candidates_limited = shock_candidates[:15] # 決算ショック枠は最大15件
+
+    # 3. 2つの独立した精査候補リストをマージ
+    all_passed_limited = normal_candidates_limited + shock_candidates_limited
+
+    print(f"➔ [厳選リミッター作動]: 通常枠上位 {len(normal_candidates_limited)} 銘柄 ＋ 決算急落枠上位 {len(shock_candidates_limited)} 銘柄を精査対象に選定しました。")
     print("\n=== [第2段階] 統合合格銘柄に対するファンダメンタルズ個別精査を開始します ===")
     
     for idx, (ticker, hist, latest, latest_date, sig_type) in enumerate(all_passed_limited):
