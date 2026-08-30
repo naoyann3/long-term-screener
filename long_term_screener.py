@@ -955,6 +955,7 @@ def run() -> None:
             & (df_out["ma75_slope_pct"] >= GC_MIN_MA75_SLOPE_PCT)
         ].copy()
         
+        # === long_term_screener.py 484行目付近、GCリスト生成部を修正 ===
         if not gc_df.empty:
             gc_df = gc_df.sort_values(
                 ["reversal_from_bearish_po", "early_reversal_setup", "days_since_perfect_order", "days_since_75gc200", "score"],
@@ -978,9 +979,16 @@ def run() -> None:
             gc_output_df = gc_df[gc_col_list].head(TOP_N_GC_OUTPUT)
             gc_export_df = format_long_term_gc_output(gc_output_df)
             
+            # 1. ルート直下の最新版への上書き
             latest_gc_output_path = _latest_gc_output_path()
             gc_export_df.to_csv(latest_gc_output_path, index=False, encoding="utf-8-sig")
             print(f"GC専用出力完了: {latest_gc_output_path.name}")
+            
+            # 🌟【Version 3.2 復元修正】：GC専用日付付き履歴ファイルの保存ロジックを追加
+            dated_gc_output_path = _gc_watchlists_dir() / f"{screen_date.isoformat()}_{LONG_TERM_SCREEN_VERSION}_{run_stamp}.csv"
+            _gc_watchlists_dir().mkdir(parents=True, exist_ok=True)
+            gc_export_df.to_csv(dated_gc_output_path, index=False, encoding="utf-8-sig")
+            print(f"GC専用履歴保存完了: {dated_gc_output_path.name}")
 
     # --- B. 🟣 【決算ショック再評価候補】の専用CSV出力 --- (④ & ⑥)
     if shock_rows:
