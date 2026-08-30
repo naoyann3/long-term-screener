@@ -1,4 +1,4 @@
-# long_term_screener.py (Version 3.2 - Hybrid Dual-Path Earnings Shock 精査枠分離 Complete)
+# long_term_screener.py (Version 3.3 - Hybrid Dual-Path Earnings Shock 精査枠分離 ＆ 前日比計算バグ修正 ＆ GC履歴復元 Complete)
 from __future__ import annotations
 
 from datetime import datetime, date
@@ -65,6 +65,10 @@ def _latest_output_path() -> Path:
 
 def _latest_gc_output_path() -> Path:
     return Path(__file__).resolve().parent / _latest_output_path().name.replace("watchlist", "gc_watchlist")
+
+
+def _gc_watchlists_dir() -> Path:
+    return Path(__file__).resolve().parent / "results" / "long_term_gc_watchlists"
 
 
 def _latest_shock_output_path() -> Path:
