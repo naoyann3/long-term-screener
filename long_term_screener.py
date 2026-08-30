@@ -1,4 +1,4 @@
-# long_term_screener.py (Version 3.4 - Dual-Path Precision Screening V3.4 Complete)
+# long_term_screener.py (Version 3.4 - Hybrid Dual-Path Earnings Shock 精査枠分離 ＆ 厳密日付キャスト ＆ 時価総額300億緩和 Complete)
 from __future__ import annotations
 
 from datetime import datetime, date
@@ -152,16 +152,17 @@ def fetch_next_earnings_date(ticker_obj, ticker: str) -> date | None:
     """
     next_earnings_date = None
     
-    # ルート1: calendar 属性をパース [1]
+    # ルート1: calendar 属性をパース
     try:
         calendar = ticker_obj.calendar
         if calendar and "Earnings Date" in calendar:
             dates = calendar["Earnings Date"]
             if isinstance(dates, list) and len(dates) > 0:
-                # 🌟 すでに date 型であればそのまま、datetime 型であれば .date() を呼ぶ安全設計
-                next_earnings_date = dates[0] if isinstance(dates[0], date) else dates[0].date()
+                d = dates[0]
+                # 🌟【Version 3.4 厳密日付キャスト】：datetimeはdateのサブクラスであるため、厳密に not datetime 判定を挟みます
+                next_earnings_date = d if (isinstance(d, date) and not isinstance(d, datetime)) else d.date()
             elif isinstance(dates, (datetime, date)):
-                next_earnings_date = dates if isinstance(dates, date) else dates.date()
+                next_earnings_date = dates if (isinstance(dates, date) and not isinstance(dates, datetime)) else dates.date()
     except Exception:
         pass
         
@@ -173,9 +174,9 @@ def fetch_next_earnings_date(ticker_obj, ticker: str) -> date | None:
                 # タイムゾーンを排除してローカル日付に統一
                 future_dates = earnings_dates[earnings_dates.index.tz_localize(None) > datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)]
                 if not future_dates.empty:
-                    # すでにインデックスが date 型または DatetimeIndex である場合に対応
                     raw_d = future_dates.index[-1]
-                    next_earnings_date = raw_d if isinstance(raw_d, date) else raw_d.date()
+                    # 🌟 ここも厳密判定を挟みます
+                    next_earnings_date = raw_d if (isinstance(raw_d, date) and not isinstance(raw_d, datetime)) else raw_d.date()
         except Exception:
             pass
 
@@ -189,6 +190,12 @@ def calc_business_days(target_date: date | None, latest_date: date) -> int | str
     if target_date is None:
         return "EARNINGS_UNKNOWN"
     
+    # 🌟【最重要安全化】：対象日と算出基準日を、100%確実に「純粋な datetime.date 型」に強制統一
+    if isinstance(target_date, datetime):
+        target_date = target_date.date()
+    if isinstance(latest_date, datetime):
+        latest_date = latest_date.date()
+        
     delta_days = (target_date - latest_date).days
     if delta_days < 0:
         return "ALREADY_PASSED"
