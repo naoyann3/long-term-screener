@@ -1,4 +1,4 @@
-# long_term_screener.py (Version 3.4 - Hybrid Dual-Path Earnings Shock 精査枠分離 ＆ 厳密日付キャスト ＆ 時価総額300億緩和 Complete)
+# long_term_screener.py (Version 3.5 - Hybrid Dual-Path Earnings Shock 精査枠分離 ＆ 厳密日付キャスト ＆ 時価総額300億緩和 Complete)
 from __future__ import annotations
 
 from datetime import datetime, date
@@ -159,7 +159,7 @@ def fetch_next_earnings_date(ticker_obj, ticker: str) -> date | None:
             dates = calendar["Earnings Date"]
             if isinstance(dates, list) and len(dates) > 0:
                 d = dates[0]
-                # 🌟【Version 3.4 厳密日付キャスト】：datetimeはdateのサブクラスであるため、厳密に not datetime 判定を挟みます
+                # 🌟【Version 3.5 厳密日付キャスト】：datetimeはdateのサブクラスであるため、厳密に not datetime 判定を挟みます
                 next_earnings_date = d if (isinstance(d, date) and not isinstance(d, datetime)) else d.date()
             elif isinstance(dates, (datetime, date)):
                 next_earnings_date = dates if (isinstance(dates, date) and not isinstance(dates, datetime)) else dates.date()
