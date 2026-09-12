@@ -1,4 +1,4 @@
-# long_term_screener.py (Version 3.5 - Hybrid Dual-Path Earnings Shock 精査枠分離 ＆ 厳密日付キャスト ＆ 時価総額300億緩和 Complete)
+# long_term_screener.py (Version 3.5 - Complete Verified Edition)
 from __future__ import annotations
 
 from datetime import datetime, date
@@ -159,7 +159,7 @@ def fetch_next_earnings_date(ticker_obj, ticker: str) -> date | None:
             dates = calendar["Earnings Date"]
             if isinstance(dates, list) and len(dates) > 0:
                 d = dates[0]
-                # 🌟【Version 3.5 厳密日付キャスト】：datetimeはdateのサブクラスであるため、厳密に not datetime 判定を挟みます
+                # 🌟【厳密日付キャスト】：datetimeはdateのサブクラスであるため、厳密に not datetime 判定を挟みます
                 next_earnings_date = d if (isinstance(d, date) and not isinstance(d, datetime)) else d.date()
             elif isinstance(dates, (datetime, date)):
                 next_earnings_date = dates if (isinstance(dates, date) and not isinstance(dates, datetime)) else dates.date()
@@ -175,7 +175,6 @@ def fetch_next_earnings_date(ticker_obj, ticker: str) -> date | None:
                 future_dates = earnings_dates[earnings_dates.index.tz_localize(None) > datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)]
                 if not future_dates.empty:
                     raw_d = future_dates.index[-1]
-                    # 🌟 ここも厳密判定を挟みます
                     next_earnings_date = raw_d if (isinstance(raw_d, date) and not isinstance(raw_d, datetime)) else raw_d.date()
         except Exception:
             pass
@@ -190,7 +189,7 @@ def calc_business_days(target_date: date | None, latest_date: date) -> int | str
     if target_date is None:
         return "EARNINGS_UNKNOWN"
     
-    # 🌟【最重要安全化】：対象日と算出基準日を、100%確実に「純粋な datetime.date 型」に強制統一
+    # 🌟【最重要安全化】：対象日と算出基準日を、確実に「純粋な datetime.date 型」に強制統一
     if isinstance(target_date, datetime):
         target_date = target_date.date()
     if isinstance(latest_date, datetime):
@@ -475,7 +474,6 @@ def calc_indicators(df: pd.DataFrame) -> pd.DataFrame:
     df["deep_value_setup"] = df["drawdown_from_52w_high_pct"] <= -64.0
 
     # ボリンジャーバンド幅・RSIの計算定義を追加
-    # (※前バージョンで不足していたローカル安全定義を追加補強)
     df["ma20"] = df["Close"].rolling(20).mean()
     df["std20"] = df["Close"].rolling(20).std()
     df["bb_width"] = (df["std20"] * 4) / df["ma20"] * 100
@@ -488,7 +486,7 @@ def calc_indicators(df: pd.DataFrame) -> pd.DataFrame:
     rs = ema_up / ema_down.replace(0, 1e-10)
     df["rsi14"] = 100 - (100 / (1 + rs))
 
-    # 🌟【Version 3.3 修正】：前日比騰落率（終値ベース）を計算
+    # 🌟【前日比騰落率（終値ベース）の計算を追加】
     df["change_1d_pct"] = (df["Close"] - df["Close"].shift(1)) / df["Close"].shift(1) * 100
 
     forgotten_scores = []
@@ -588,7 +586,7 @@ def score_row(latest: pd.Series, fundamentals: dict) -> tuple[float, float, floa
         strength_score += 3.0
     if latest["early_reversal_setup"]:
         strength_score += 2.5
-    if latest["reversal_from_bearish_po"]:
+    if latest.get("reversal_from_bearish_po"):
         strength_score += 4.0
     if latest["pullback_candidate"]:
         strength_score += 2.0
@@ -620,7 +618,7 @@ def run() -> None:
     name_map = dict(zip(tickers_df["ticker"], tickers_df["name"]))
 
     rows: list[dict] = []
-    shock_rows: list[dict] = []  # 👈 新設：決算ショック急落銘柄用のローリスト
+    shock_rows: list[dict] = []  # 決算ショック急落銘柄用のローリスト
     run_started_at = datetime.now()
     generated_at = run_started_at.isoformat(timespec="seconds")
     run_stamp = run_started_at.strftime("%Y%m%d_%H%M%S")
@@ -760,15 +758,16 @@ def run() -> None:
                 continue
 
             current_sector = fundamentals.get("sector", "不明")
-            # 🌟 決算ショック銘柄は300億円以上に緩和、通常枠は1,000億円以上
-            min_cap_limit = 30_000_000_000 if sig_type == "earnings_shock" else MIN_MARKET_CAP
-            market_cap = fundamentals.get("market_cap")
-            if market_cap is None or market_cap < min_cap_limit:
+            # 【地雷セクター除外】※ただし決算ショック銘柄は、リバウンド候補のため除外緩和
+            if sig_type != "earnings_shock" and current_sector in ["Real Estate", "Healthcare"]:
+                print(f"    ➔ ❌ [地雷セクター完全除外] {ticker} は不人気セクター（{current_sector}）のため、自動足切りしました。")
                 time.sleep(SLEEP_SEC)
                 continue
 
+            # 🌟【Version 3.4 修正】：決算ショック候補に限り、時価総額の壁を300億円に自動緩和
+            min_cap_limit = 30_000_000_000 if sig_type == "earnings_shock" else MIN_MARKET_CAP
             market_cap = fundamentals.get("market_cap")
-            if market_cap is None or market_cap < MIN_MARKET_CAP:
+            if market_cap is None or market_cap < min_cap_limit:
                 time.sleep(SLEEP_SEC)
                 continue
 
@@ -790,7 +789,9 @@ def run() -> None:
                     continue
 
             # 💡 【Version 3.0新設：次回決算日 ＆ 段階的リスク評価の動的適用】
-            # 🌟 latest_date が datetime型のときのみ .date() を呼び出し、安全にキャスト
+            next_earn_date = fetch_next_earnings_date(ticker_obj, ticker)
+            
+            # 🌟【Version 3.5 修正】：latest_date が datetime型のときのみ .date() を呼び出し、安全にキャスト
             latest_date_only = latest_date.date() if isinstance(latest_date, datetime) else latest_date
             bus_days = calc_business_days(next_earn_date, latest_date_only)
             risk_level_label, risk_penalty, risk_comment = evaluate_earnings_risk(bus_days)
@@ -897,7 +898,7 @@ def run() -> None:
 
             # 分類
             if sig_type == "earnings_shock":
-                # 🟣 決算ショック専用リストに追加（セクター平均との乖離も保存） (⑦)
+                # 🟣 決算ショック専用リストに追加（セクター平均との乖離も保存）
                 data_row["sector_avg_return_40d"] = round(s_info["avg_return"], 2)
                 data_row["stock_return_vs_sector"] = relative_strength
                 shock_rows.append(data_row)
@@ -984,7 +985,6 @@ def run() -> None:
             & (df_out["ma75_slope_pct"] >= GC_MIN_MA75_SLOPE_PCT)
         ].copy()
         
-        # === long_term_screener.py 484行目付近、GCリスト生成部を修正 ===
         if not gc_df.empty:
             gc_df = gc_df.sort_values(
                 ["reversal_from_bearish_po", "early_reversal_setup", "days_since_perfect_order", "days_since_75gc200", "score"],
@@ -1013,13 +1013,13 @@ def run() -> None:
             gc_export_df.to_csv(latest_gc_output_path, index=False, encoding="utf-8-sig")
             print(f"GC専用出力完了: {latest_gc_output_path.name}")
             
-            # 🌟【Version 3.2 復元修正】：GC専用日付付き履歴ファイルの保存ロジックを追加
+            # 🌟【GC専用日付付き履歴ファイルの保存ロジック】
             dated_gc_output_path = _gc_watchlists_dir() / f"{screen_date.isoformat()}_{LONG_TERM_SCREEN_VERSION}_{run_stamp}.csv"
             _gc_watchlists_dir().mkdir(parents=True, exist_ok=True)
             gc_export_df.to_csv(dated_gc_output_path, index=False, encoding="utf-8-sig")
             print(f"GC専用履歴保存完了: {dated_gc_output_path.name}")
 
-    # --- B. 🟣 【決算ショック再評価候補】の専用CSV出力 --- (④ & ⑥)
+    # --- B. 🟣 【決算ショック再評価候補】の専用CSV出力 ---
     if shock_rows:
         df_shock = pd.DataFrame(shock_rows)
         # ギャップダウンの激しさ（急落度）の強い順にソートして可視化
