@@ -760,9 +760,10 @@ def run() -> None:
                 continue
 
             current_sector = fundamentals.get("sector", "不明")
-            # 【地雷セクター除外】※ただし決算ショック銘柄は、リバウンド候補のため除外緩和
-            if sig_type != "earnings_shock" and current_sector in ["Real Estate", "Healthcare"]:
-                print(f"    ➔ ❌ [地雷セクター完全除外] {ticker} は不人気セクター（{current_sector}）のため、自動足切りしました。")
+            # 🌟 決算ショック銘柄は300億円以上に緩和、通常枠は1,000億円以上
+            min_cap_limit = 30_000_000_000 if sig_type == "earnings_shock" else MIN_MARKET_CAP
+            market_cap = fundamentals.get("market_cap")
+            if market_cap is None or market_cap < min_cap_limit:
                 time.sleep(SLEEP_SEC)
                 continue
 
@@ -789,8 +790,9 @@ def run() -> None:
                     continue
 
             # 💡 【Version 3.0新設：次回決算日 ＆ 段階的リスク評価の動的適用】
-            next_earn_date = fetch_next_earnings_date(ticker_obj, ticker)
-            bus_days = calc_business_days(next_earn_date, latest_date.date())
+            # 🌟 latest_date が datetime型のときのみ .date() を呼び出し、安全にキャスト
+            latest_date_only = latest_date.date() if isinstance(latest_date, datetime) else latest_date
+            bus_days = calc_business_days(next_earn_date, latest_date_only)
             risk_level_label, risk_penalty, risk_comment = evaluate_earnings_risk(bus_days)
             
             screen_date = latest_date if screen_date is None else max(screen_date, latest_date)
