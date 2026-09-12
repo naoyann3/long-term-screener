@@ -1,1 +1,9 @@
-﻿run_date,rank,ticker,name
+﻿run_date,rank,ticker,name,close,change_20d_pct,volume_ratio_20,close_vs_ma25_pct,close_vs_ma75_pct,close_vs_ma200_pct,market_cap_billion,sector,industry,sector_stars,sector_avg_return_40d,stock_return_vs_sector,next_earnings_date,earnings_risk_level
+2026-09-11,1,4461.T,第一工業製薬,12480.0,-18.325,0.828,-9.168,2.134,22.619,132.423,Basic Materials,Specialty Chemicals,★★★☆☆,0.0,15.66,EARNINGS_UNKNOWN,⚪ 決算日不明
+2026-09-11,2,4004.T,レゾナック・ホールディングス,14295.0,-13.179,1.627,-11.343,-12.352,13.383,2711.861,Basic Materials,Chemicals,★★★☆☆,0.0,-4.03,2026-11-11,🟢 低
+2026-09-11,3,6525.T,ＫＯＫＵＳＡＩ　ＥＬＥＣＴＲＩＣ,8162.0,-11.157,1.015,-4.666,-8.601,16.444,1904.879,Technology,Semiconductor Equipment & Materials,★★★☆☆,0.0,-17.47,2026-11-09,🟢 低
+2026-09-11,4,3778.T,さくらインターネット,3660.0,-5.426,0.613,-0.527,14.9,20.077,146.49,Technology,Information Technology Services,★★★☆☆,0.0,25.13,EARNINGS_UNKNOWN,⚪ 決算日不明
+2026-09-11,5,7456.T,松田産業,6790.0,-2.443,1.088,-2.144,9.042,8.329,175.467,Basic Materials,Other Precious Metals & Mining,★★★☆☆,0.0,22.56,EARNINGS_UNKNOWN,⚪ 決算日不明
+2026-09-11,6,1515.T,日鉄鉱業,3340.0,-0.743,1.019,-6.19,14.97,19.676,262.798,Basic Materials,Copper,★★★☆☆,0.0,24.67,2026-11-05,🟢 低
+2026-09-11,7,3399.T,丸千代山岡家,3820.0,1.058,2.187,-2.066,6.837,13.38,75.253,Consumer Cyclical,Restaurants,★★★☆☆,0.0,-1.8,EARNINGS_UNKNOWN,⚪ 決算日不明
+2026-09-11,8,7826.T,フルヤ金属,10330.0,21.387,1.129,11.238,24.721,55.312,254.111,Technology,Electronic Components,★★★☆☆,0.0,47.99,EARNINGS_UNKNOWN,⚪ 決算日不明
