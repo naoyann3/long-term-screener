@@ -1,2 +1,1 @@
-﻿run_date,rank,ticker,name,close,change_20d_pct,volume_ratio_20,close_vs_ma25_pct,close_vs_ma75_pct,close_vs_ma200_pct,market_cap_billion,sector,industry,sector_stars,sector_avg_return_40d,stock_return_vs_sector,next_earnings_date,earnings_risk_level
-2026-09-11,1,4004.T,レゾナック・ホールディングス,14295.0,-13.179,1.627,-11.343,-12.352,13.383,2549.662,Basic Materials,Chemicals,★★★☆☆,0.0,-4.03,2026-11-11,🟢 低
+﻿run_date,rank,ticker,name
