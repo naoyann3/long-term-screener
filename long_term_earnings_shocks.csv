@@ -1,1 +1,2 @@
-﻿run_date,rank,ticker,name
+﻿run_date,rank,ticker,name,close,change_20d_pct,volume_ratio_20,close_vs_ma25_pct,close_vs_ma75_pct,close_vs_ma200_pct,market_cap_billion,sector,industry,sector_stars,sector_avg_return_40d,stock_return_vs_sector,next_earnings_date,earnings_risk_level
+2026-09-16,1,4588.T,オンコリスバイオファーマ,5800.0,69.591,2.17,28.935,78.627,129.137,185.477,Healthcare,Biotechnology,★★★☆☆,0.0,140.17,EARNINGS_UNKNOWN,⚪ 決算日不明
