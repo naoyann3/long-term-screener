@@ -1,2 +1,1 @@
-﻿run_date,rank,ticker,name,close,change_20d_pct,volume_ratio_20,close_vs_ma25_pct,close_vs_ma75_pct,close_vs_ma200_pct,market_cap_billion,sector,industry,sector_stars,sector_avg_return_40d,stock_return_vs_sector,next_earnings_date,earnings_risk_level
-2026-09-28,1,2737.T,トーメンデバイス,39100.0,17.771,1.795,13.614,58.903,127.42,265.573,Technology,Semiconductors,★★★☆☆,0.0,176.33,EARNINGS_UNKNOWN,⚪ 決算日不明
+﻿run_date,rank,ticker,name
