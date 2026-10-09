@@ -1,2 +1,4 @@
 ﻿run_date,rank,ticker,name,close,change_20d_pct,volume_ratio_20,close_vs_ma25_pct,close_vs_ma75_pct,close_vs_ma200_pct,market_cap_billion,sector,industry,sector_stars,sector_avg_return_40d,stock_return_vs_sector,next_earnings_date,earnings_risk_level
-2026-10-07,1,4417.T,グローバルセキュリティエキスパート,5860.0,35.633,3.946,14.57,30.367,70.071,99.102,Technology,Software - Infrastructure,★★★☆☆,0.0,18.56,EARNINGS_UNKNOWN,⚪ 決算日不明
+2026-10-08,1,1965.T,テクノ菱和,2183.0,-6.275,2.749,-4.215,5.612,2.044,135.631,Industrials,Engineering & Construction,★★★☆☆,0.0,9.78,EARNINGS_UNKNOWN,⚪ 決算日不明
+2026-10-08,2,2160.T,ジーエヌアイグループ,3150.0,7.399,1.679,1.723,12.011,11.729,210.607,Healthcare,Biotechnology,★★★☆☆,0.0,8.06,2026-11-13,🟢 低
+2026-10-08,3,5985.T,サンコール,2558.0,17.934,1.711,12.39,35.31,62.613,78.151,Consumer Cyclical,Auto Parts,★★★☆☆,0.0,47.38,EARNINGS_UNKNOWN,⚪ 決算日不明
