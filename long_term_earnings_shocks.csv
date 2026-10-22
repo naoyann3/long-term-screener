@@ -1,3 +1,1 @@
-﻿run_date,rank,ticker,name,close,change_20d_pct,volume_ratio_20,close_vs_ma25_pct,close_vs_ma75_pct,close_vs_ma200_pct,market_cap_billion,sector,industry,sector_stars,sector_avg_return_40d,stock_return_vs_sector,next_earnings_date,earnings_risk_level
-2026-10-20,1,6524.T,湖北工業,4835.0,0.311,2.247,-10.133,-2.431,1.608,128.895,Technology,Electronic Components,★★★☆☆,0.0,2.65,EARNINGS_UNKNOWN,⚪ 決算日不明
-2026-10-20,2,4461.T,第一工業製薬,12980.0,5.492,1.567,-9.464,-0.422,18.994,141.124,Basic Materials,Specialty Chemicals,★★★☆☆,0.0,-2.76,EARNINGS_UNKNOWN,⚪ 決算日不明
+﻿run_date,rank,ticker,name
