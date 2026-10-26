@@ -1,3 +1,2 @@
 ﻿run_date,rank,ticker,name,close,change_20d_pct,volume_ratio_20,close_vs_ma25_pct,close_vs_ma75_pct,close_vs_ma200_pct,market_cap_billion,sector,industry,sector_stars,sector_avg_return_40d,stock_return_vs_sector,next_earnings_date,earnings_risk_level
-2026-10-22,1,4894.T,クオリプス,6370.0,9.45,1.872,3.658,18.861,3.774,57.354,Healthcare,Biotechnology,★★★☆☆,0.0,21.33,EARNINGS_UNKNOWN,⚪ 決算日不明
-2026-10-22,2,2326.T,デジタルアーツ,5800.0,18.502,3.103,7.304,25.295,20.383,81.084,Technology,Software - Infrastructure,★★★☆☆,0.0,31.54,2026-10-30,🟠 高い（接近）
+2026-10-23,1,3399.T,丸千代山岡家,4760.0,23.476,5.818,11.711,21.534,34.202,93.968,Consumer Cyclical,Restaurants,★★★☆☆,0.0,22.05,EARNINGS_UNKNOWN,⚪ 決算日不明
