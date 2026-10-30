@@ -1,3 +1,1 @@
-﻿run_date,rank,ticker,name,close,change_20d_pct,volume_ratio_20,close_vs_ma25_pct,close_vs_ma75_pct,close_vs_ma200_pct,market_cap_billion,sector,industry,sector_stars,sector_avg_return_40d,stock_return_vs_sector,next_earnings_date,earnings_risk_level
-2026-10-28,1,2737.T,トーメンデバイス,25450.0,-34.827,5.034,-30.677,-15.531,28.727,174.986,Technology,Semiconductors,★★★☆☆,0.0,-20.34,EARNINGS_UNKNOWN,⚪ 決算日不明
-2026-10-28,2,9697.T,カプコン,3835.0,-11.981,2.378,-12.745,-6.185,6.828,1566.689,Communication Services,Electronic Gaming & Multimedia,★★★☆☆,0.0,-10.32,2027-01-26,🟢 低
+﻿run_date,rank,ticker,name
