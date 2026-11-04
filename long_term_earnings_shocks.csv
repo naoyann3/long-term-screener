@@ -1,2 +1,2 @@
 ﻿run_date,rank,ticker,name,close,change_20d_pct,volume_ratio_20,close_vs_ma25_pct,close_vs_ma75_pct,close_vs_ma200_pct,market_cap_billion,sector,industry,sector_stars,sector_avg_return_40d,stock_return_vs_sector,next_earnings_date,earnings_risk_level
-2026-11-02,1,4768.T,大塚商会,3828.0,4.163,2.674,-5.159,5.865,19.89,1451.582,Technology,Information Technology Services,★★★☆☆,0.0,6.81,2026-10-30,🟢 決算通過直後
+2026-11-02,1,4768.T,大塚商会,3828.0,4.163,2.674,-5.159,5.865,19.89,1420.867,Technology,Information Technology Services,★★★☆☆,0.0,6.81,2026-10-30,🟢 決算通過直後
