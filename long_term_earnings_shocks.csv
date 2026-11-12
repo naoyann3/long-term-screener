@@ -1,2 +1,4 @@
 ﻿run_date,rank,ticker,name,close,change_20d_pct,volume_ratio_20,close_vs_ma25_pct,close_vs_ma75_pct,close_vs_ma200_pct,market_cap_billion,sector,industry,sector_stars,sector_avg_return_40d,stock_return_vs_sector,next_earnings_date,earnings_risk_level
-2026-11-10,1,2801.T,キッコーマン,1664.5,-5.157,3.621,-7.096,-4.213,6.252,1549.204,Consumer Defensive,Packaged Foods,★★★☆☆,0.0,-1.21,2027-02-04,🟢 低
+2026-11-11,1,2607.T,不二製油,4207.0,-7.943,4.285,-6.842,-4.042,6.548,360.351,Consumer Defensive,Packaged Foods,★★★☆☆,0.0,-3.3,2027-02-05,🟢 低
+2026-11-11,2,4922.T,コーセーホールディングス,5693.0,0.708,2.735,-2.582,-1.065,1.409,333.466,Consumer Defensive,Household & Personal Products,★★★☆☆,0.0,3.1,2027-02-11,🟢 低
+2026-11-11,3,9336.T,大栄環境,3945.0,3.543,1.55,0.02,3.747,2.84,401.008,Industrials,Waste Management,★★★☆☆,0.0,6.12,2027-02-10,🟢 低
