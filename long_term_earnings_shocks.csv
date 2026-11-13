@@ -1,4 +1,4 @@
 ﻿run_date,rank,ticker,name,close,change_20d_pct,volume_ratio_20,close_vs_ma25_pct,close_vs_ma75_pct,close_vs_ma200_pct,market_cap_billion,sector,industry,sector_stars,sector_avg_return_40d,stock_return_vs_sector,next_earnings_date,earnings_risk_level
-2026-11-11,1,2607.T,不二製油,4207.0,-7.943,4.285,-6.842,-4.042,6.548,360.351,Consumer Defensive,Packaged Foods,★★★☆☆,0.0,-3.3,2027-02-05,🟢 低
-2026-11-11,2,4922.T,コーセーホールディングス,5693.0,0.708,2.735,-2.582,-1.065,1.409,333.466,Consumer Defensive,Household & Personal Products,★★★☆☆,0.0,3.1,2027-02-11,🟢 低
-2026-11-11,3,9336.T,大栄環境,3945.0,3.543,1.55,0.02,3.747,2.84,401.008,Industrials,Waste Management,★★★☆☆,0.0,6.12,2027-02-10,🟢 低
+2026-11-12,1,3040.T,ソリトンシステムズ,2606.0,-18.179,1.565,-15.613,0.891,20.304,48.208,Technology,Software - Infrastructure,★★★☆☆,0.0,16.97,EARNINGS_UNKNOWN,⚪ 決算日不明
+2026-11-12,2,6250.T,やまびこ,3980.0,-11.359,2.36,-7.964,-6.639,2.639,163.304,Industrials,Tools & Accessories,★★★☆☆,0.0,-7.55,EARNINGS_UNKNOWN,⚪ 決算日不明
+2026-11-12,3,6523.T,ＰＨＣホールディングス,1284.0,-5.727,2.093,-7.209,-5.248,11.026,156.355,Healthcare,Medical Devices,★★★☆☆,0.0,6.43,2027-02-11,🟢 低
