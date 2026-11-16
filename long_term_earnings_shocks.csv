@@ -1,4 +1,1 @@
-﻿run_date,rank,ticker,name,close,change_20d_pct,volume_ratio_20,close_vs_ma25_pct,close_vs_ma75_pct,close_vs_ma200_pct,market_cap_billion,sector,industry,sector_stars,sector_avg_return_40d,stock_return_vs_sector,next_earnings_date,earnings_risk_level
-2026-11-12,1,3040.T,ソリトンシステムズ,2606.0,-18.179,1.565,-15.613,0.891,20.304,48.208,Technology,Software - Infrastructure,★★★☆☆,0.0,16.97,EARNINGS_UNKNOWN,⚪ 決算日不明
-2026-11-12,2,6250.T,やまびこ,3980.0,-11.359,2.36,-7.964,-6.639,2.639,163.304,Industrials,Tools & Accessories,★★★☆☆,0.0,-7.55,EARNINGS_UNKNOWN,⚪ 決算日不明
-2026-11-12,3,6523.T,ＰＨＣホールディングス,1284.0,-5.727,2.093,-7.209,-5.248,11.026,156.355,Healthcare,Medical Devices,★★★☆☆,0.0,6.43,2027-02-11,🟢 低
+﻿run_date,rank,ticker,name
