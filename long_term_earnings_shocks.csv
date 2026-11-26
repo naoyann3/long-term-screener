@@ -1,2 +1,1 @@
-﻿run_date,rank,ticker,name,close,change_20d_pct,volume_ratio_20,close_vs_ma25_pct,close_vs_ma75_pct,close_vs_ma200_pct,market_cap_billion,sector,industry,sector_stars,sector_avg_return_40d,stock_return_vs_sector,next_earnings_date,earnings_risk_level
-2026-11-24,1,4933.T,Ｉ－ｎｅ,2240.0,-3.282,11.434,-7.216,14.297,51.739,39.87,Consumer Defensive,Household & Personal Products,★★★☆☆,0.0,-1.93,EARNINGS_UNKNOWN,⚪ 決算日不明
+﻿run_date,rank,ticker,name
